@@ -1,4 +1,6 @@
 CXX = /usr/bin/x86_64-w64-mingw32-g++
+CXXFLAGS        = -c -pedantic -Wall -Wpointer-arith -Wcast-qual -std=c++11 \
+					-Iinclude $(SDL2_CFLAGS) -O3
 
 SDL_ROOT_DIR    = /usr/x86_64-w64-mingw32
 
@@ -6,9 +8,6 @@ SDL2_CFLAGS     = `$(SDL_ROOT_DIR)/bin/sdl2-config --cflags`
 
 SDL2_LDFLAGS    = `$(SDL_ROOT_DIR)/bin/sdl2-config --libs` \
 					-lSDL2.dll -static-libgcc -static-libstdc++
-
-CXXFLAGS        = -c -pedantic -Wall -Wpointer-arith -Wcast-qual -std=c++11 \
-					-Iinclude $(SDL2_CFLAGS) -O3
 
 LD              = /usr/bin/x86_64-w64-mingw32-g++
 LDFLAGS         = $(SDL2_LDFLAGS)

@@ -18,16 +18,22 @@
 bool debugColors = false, ceilingOn = false, enableInput = false;
 int mapWidth = 24;
 int mapHeight = 24;
-const int gscreenWidth =  1280; //640; //720; //800; //960;
-const int gscreenHeight = 720; //360; //405; //450; //540;
+const int gscreenWidth =  960;//1920;//1280; //640; //720; //800; //960;
+const int gscreenHeight = 540;//1080;//720; //360; //405; //450; //540;
+const int raysHResolution = 540;
 int minBrightness = 0x01;
 double torchBrightness = 1; // 0 - 1; multipler affecting torch light radius around player
+
 bool vertSyncOn = true;
 double currentDist[gscreenHeight];
+double brightSin[gscreenWidth];
 
 const double radToDeg = 180 / M_PI;
+const double degToRad = M_PI / 180;
 
-double planeX = 0, planeY = (90.0/90.0);
+double hFOV = 90.0;
+
+double planeX = 0, planeY = (hFOV/90.0);
 
 double posX = 2, posY = 2;         //x and y start position
 double dirX = 1, dirY = 0;         //initial direction vector straight down
@@ -57,7 +63,7 @@ int gtexHeight = 0;
 SDL_Rect gfloorRect;
 SDL_Rect gskyDestRect;
 SDL_Rect gskySrcRect;
-SDL_Rect weaponTexRect = {0,0,160,160}; //TODO: stop hardcoding this
+SDL_Rect weaponTexRect = {0,0,0,0};
 SDL_Rect weaponDestRect;
 std::stringstream ssFPS;
 std::vector<std::vector<int>> leveldata;
@@ -264,12 +270,15 @@ bool initTextures()
     else
     {
         int tw, th;
+        double scale;
         SDL_QueryTexture(weaponTex, NULL, NULL, &tw, &th);
         weaponTexRect={0,0,tw,th};
+        scale = (gscreenWidth/2.0)/tw; //set gun to approx the size of the lower right quadrant of the screen
+        tw *= scale;
+        th *= scale;
         weaponDestRect = {std::max(gscreenWidth-tw,0),std::max(gscreenHeight-th,0),tw,th};
     }
     
-
     SDL_RendererInfo info;
     SDL_GetRendererInfo(gRenderer,&info);
     gfloorBuffer = SDL_CreateTexture(gRenderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING, gscreenWidth, gscreenHeight);
@@ -288,8 +297,14 @@ bool initTextures()
         {
             currentDist[y] = (gscreenHeight) / (2.0*y - (gscreenHeight));
         }
+        for(int x = 0; x < gscreenWidth; x++) //setup a sin lookup table for the shadow mask for later
+        {
+            brightSin[x] = sin((M_PI / 2.0)-(hFOV / 2.0 * degToRad)+(((double)x/(double)gscreenWidth)*(hFOV * degToRad)));
+            brightSin[x] *= brightSin[x]; // squared to get stronger curve effect
+        }
         generateShadowMask(gshadowTex, gscreenWidth, gscreenHeight);
     }
+
 
     return success;
 }
@@ -789,6 +804,8 @@ void drawWorldGeoTex(double* wallDist, int* side, int* mapX, int* mapY)
         //trying to match drawn sky segment to FOV
         //skybox is 900 pix wide, FOV is ~75 degrees, so we can see ~188 pixels at a time
 
+        /* TODO: fix hardcoded magic numbers for skybox to be FOV aware */
+
         //all of these hard coded values are dependent on the sky texture resolution, but not the game resolution
         //altering the game FOV will make the values wrong though
         //need to make it calculated based on FOV and sky texture dimensions
@@ -822,7 +839,7 @@ void drawWorldGeoTex(double* wallDist, int* side, int* mapX, int* mapY)
 
         if(ceilingOn) //if we're drawing the ceiling, use ambiant light and torch brightness to set wall brightness
         {
-            brightness = (int)std::max(std::min(255.0, lineHeight * torchBrightness), (double)minBrightness);
+            brightness = (int)std::max(std::min(255.0, lineHeight * torchBrightness * brightSin[x]), (double)minBrightness);
         }
         else //if no ceiling, use north-south vs east-west wall to set wall brightness
         {
@@ -885,7 +902,7 @@ void drawWorldGeoTex(double* wallDist, int* side, int* mapX, int* mapY)
         // for (int y = drawStart; y < drawEnd; y++)
         //  {
         //     int d = y * 256 - gscreenHeight * 128 + lineHeight * 128; //256 and 128 factors to avoid floats
-        //     // TODO: avoid the division to speed this up
+        //     /* TODO: avoid the division to speed this up */
         //     int texY = ((d * gtexHeight) / lineHeight) / 256;
         //     Uint32 color = currPixels[gtexWidth * texY + texX];
         //     //make color darker for y-sides: R, G and B byte each divided through two with a "shift" and an "and"
@@ -1169,13 +1186,15 @@ void generateShadowMask(SDL_Texture* tex, int texWidth, int texHeight)
     Uint32 format;
     SDL_QueryTexture(tex, &format, NULL, NULL, NULL);
     SDL_PixelFormat *mappingFormat = SDL_AllocFormat(format);
+    double tempBright = 0; //variable to offset torchbrightness by sin lookup table for each column, giving a nice curved radius to the torch fade
     for(int y = 0; y < texHeight/2; y++)
     {
+        brightness = std::max((double)minBrightness,255.0*torchBrightness/currentDist[texHeight-y]);
         for(int x = 0; x < texWidth; x++)
         {
-            brightness = 255*std::max(minBrightness/255.0,torchBrightness/currentDist[texHeight-y]);
-            pixels[y * texWidth + x] = SDL_MapRGBA(mappingFormat, brightness, brightness, brightness, 0xff);
-            pixels[(texHeight - y - 1) * texWidth + x] = SDL_MapRGBA(mappingFormat, brightness, brightness, brightness, 0xff);
+            tempBright = std::max((double)minBrightness, brightness * brightSin[x]);
+            pixels[y * texWidth + x] = SDL_MapRGBA(mappingFormat, tempBright, tempBright, tempBright, 0xff);
+            pixels[(texHeight - y - 1) * texWidth + x] = SDL_MapRGBA(mappingFormat, tempBright, tempBright, tempBright, 0xff);
         }
     }
     SDL_FreeFormat(mappingFormat);
@@ -1222,7 +1241,7 @@ void newlevel(bool warpView)
         dirX = 1;
         dirY = 0;        
         planeX = 0;
-        planeY = 0.75;
+        planeY = (hFOV/90.0);
         viewTrip = 0;
         enableInput = true;
 }
