@@ -20,7 +20,6 @@ int mapWidth = 24;
 int mapHeight = 24;
 const int gscreenWidth =  960;//1920;//1280; //640; //720; //800; //960;
 const int gscreenHeight = 540;//1080;//720; //360; //405; //450; //540;
-const int raysHResolution = 540;
 int minBrightness = 0x01;
 double torchBrightness = 1; // 0 - 1; multipler affecting torch light radius around player
 
@@ -97,7 +96,6 @@ SDL_Texture *loadImageColorKey(std::string path);
 void generateShadowMask(SDL_Texture* tex, int texWidth, int texHeight);
 void drawHud(); //just stub functions for now
 void drawWeap();
-void levelgenBSP(int width, int height); //currently unused
 
 int main(int argc, char **argv)
 {
@@ -207,7 +205,7 @@ bool initTextures()
     {
         success = false;
     }
-    else
+    else /* TODO:  fix gskySrcRect magic numbers */
     {
         int skyw, skyh;
         Uint32 skyf;
@@ -796,15 +794,13 @@ void drawWorldGeoFlat(double* wallDist, int* side, int* mapX, int* mapY)
     }
 }
 
-void drawWorldGeoTex(double* wallDist, int* side, int* mapX, int* mapY)
+void drawWorldGeoTex(double* wallDist, int* side, int* mapX, int* mapY)  /* TODO: fix hardcoded magic numbers for skybox to be FOV aware */
 {
     if(ceilingOn == false)
     {
         //Here I'm creating a sky box and rotating it according to player's viewing angle
         //trying to match drawn sky segment to FOV
         //skybox is 900 pix wide, FOV is ~75 degrees, so we can see ~188 pixels at a time
-
-        /* TODO: fix hardcoded magic numbers for skybox to be FOV aware */
 
         //all of these hard coded values are dependent on the sky texture resolution, but not the game resolution
         //altering the game FOV will make the values wrong though
@@ -894,22 +890,6 @@ void drawWorldGeoTex(double* wallDist, int* side, int* mapX, int* mapY)
         //draw wall stripe
         renderTexture(gcurrTex, gRenderer, line, &sample);
 
-        //shitty slower version of wall rendering, left for reference in case it's needed later
-        // for(int y = 0; y < drawStart; y++)
-        // {
-        //     bufferPixels[y * gscreenWidth + x] = 0;
-        // }
-        // for (int y = drawStart; y < drawEnd; y++)
-        //  {
-        //     int d = y * 256 - gscreenHeight * 128 + lineHeight * 128; //256 and 128 factors to avoid floats
-        //     /* TODO: avoid the division to speed this up */
-        //     int texY = ((d * gtexHeight) / lineHeight) / 256;
-        //     Uint32 color = currPixels[gtexWidth * texY + texX];
-        //     //make color darker for y-sides: R, G and B byte each divided through two with a "shift" and an "and"
-        //     // if (side == 1)
-        //     //    color = (color >> 1) & 8355711;
-        //     bufferPixels[y * gscreenWidth + x] = color;
-        //  }
     }
 }
 
@@ -939,7 +919,6 @@ void drawFloor(double* wallDist, int* side, int* mapX, int* mapY)
         //Calculate height of line to draw on screen
         lineHeight = (int)(gscreenHeight / wallDist[x]);
         //calculate lowest and highest pixel to fill in current stripe
-        //drawStart = -lineHeight / 2 + gscreenHeight / 2;
         drawEnd = lineHeight / 2 + gscreenHeight / 2;
         cameraX = 2 * x / double(gscreenWidth) - 1; //x-coordinate in camera space, or along the x of the camera plane itself
         rayDirX = dirX + planeX * cameraX; //the XY coord where the vector of this ray crosses the camera plane
@@ -993,7 +972,6 @@ void drawFloor(double* wallDist, int* side, int* mapX, int* mapY)
             floorTexX = int(currentFloorX * gtexWidth) % gtexWidth;
             floorTexY = int(currentFloorY * gtexHeight) % gtexHeight;
 
-            //currentColor = ufloorTexPix[gtexWidth * floorTexY + floorTexX];
             //shitty slow version. need to find a way to go faster than streaming textures and a buffer texture
             bufferPixels[y * gscreenWidth + x] = ufloorTexPix[gtexWidth * floorTexY + floorTexX];
 
@@ -1002,7 +980,6 @@ void drawFloor(double* wallDist, int* side, int* mapX, int* mapY)
                 SDL_QueryTexture(gceilTex, NULL, NULL, &gtexWidth, &gtexHeight);
                 floorTexX = int(currentFloorX * gtexWidth) % gtexWidth;
                 floorTexY = int(currentFloorY * gtexHeight) % gtexHeight;
-                //currentColor = uceilTexPix[gtexWidth * floorTexY + floorTexX];
                 bufferPixels[(gscreenHeight - y - 1) * gscreenWidth + x] = uceilTexPix[gtexWidth * floorTexY + floorTexX];
             }
             else
@@ -1155,16 +1132,6 @@ SDL_Texture *loadImageColorKey(std::string path)
         SDL_SetColorKey(bmp, SDL_TRUE, SDL_MapRGB(bmp->format, 0xff, 0x00, 0xff));
         tex = SDL_CreateTextureFromSurface(gRenderer,bmp);// (gRenderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING, bmp->w, bmp->h);
 
-        // //Lock texture for manipulation
-        // void *mPixels;
-        // int mPitch;
-        // SDL_LockTexture(tex, NULL, &mPixels, &mPitch);
-        // //Copy loaded/formatted surface pixels
-        // memcpy(mPixels, bmp->pixels, mPitch * bmp->h);
-        // //Unlock texture to update
-        // SDL_UnlockTexture(tex);
-        // mPixels = NULL;
-
         SDL_FreeSurface(bmp);
         if (tex == nullptr)
         {
@@ -1277,35 +1244,4 @@ void loadLevel(std::string path)
     }
 
     mapFile.close();
-}
-
-void levelgenBSP(int width, int height) //currently unused
-{
-    leveldata.resize(width);
-    for (int i = 0; i < width; i++)
-    {
-        leveldata[i].resize(height);
-    }
-
-    for (int i = 0; i < width; i++)
-    {
-        leveldata[i][0] = 1;
-        leveldata[i][height - 1] = 1;
-    }
-    for (int n = 0; n < height; n++)
-    {
-        leveldata[0][n] = 1;
-        leveldata[width - 1][n] = 1;
-    }
-
-    std::ofstream leveldatalog("datalog.txt");
-    for (int i = 0; i < height; i++)
-    {
-        for (int k = 0; k < width; k++)
-        {
-            leveldatalog << leveldata[k][i] << " ";
-        }
-        leveldatalog << std::endl;
-    }
-    leveldatalog.close();
 }
