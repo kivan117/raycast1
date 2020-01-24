@@ -30,9 +30,11 @@ double brightSin[gscreenWidth];
 const double radToDeg = 180 / M_PI;
 const double degToRad = M_PI / 180;
 
-double hFOV = 90.0;
+const double vFOV = 60.0;
+double hFOV = 75.0;
+bool sprinting = false;
 
-double planeX = 0, planeY = (hFOV/90.0);
+double planeX = 0, planeY = std::tan((hFOV * degToRad)/2);
 
 double posX = 2, posY = 2;         //x and y start position
 double dirX = 1, dirY = 0;         //initial direction vector straight down
@@ -96,6 +98,7 @@ SDL_Texture *loadImageColorKey(std::string path);
 void generateShadowMask(SDL_Texture* tex, int texWidth, int texHeight);
 void drawHud(); //just stub functions for now
 void drawWeap();
+void changeFOV(bool rel, double newFOV);
 
 int main(int argc, char **argv)
 {
@@ -343,19 +346,18 @@ bool handleInput()
                     mouseXDist = e.motion.xrel;
                 break;
             }
-            case(SDL_MOUSEWHEEL):
+            case(SDL_MOUSEWHEEL):  //if scroll mousewheel, change horizontal field of view
             {
                 if (enableInput)
                 {
-                    if (e.wheel.y > 0) // scroll up, increase brightness
+                    if (e.wheel.y > 0) // scroll up, increase FOV
                     {
-                        //minBrightness = std::min(255, minBrightness+10);
-                        torchBrightness = std::min(1.0, torchBrightness+0.04);
+                        changeFOV(true, 1.0);
+
                     }
-                    else if (e.wheel.y < 0) // scroll down, decrease brightness
+                    else if (e.wheel.y < 0) // scroll down, decrease FOV
                     {
-                        //minBrightness = std::max(1, minBrightness-10);
-                        torchBrightness = std::max(0.04, torchBrightness-0.04);
+                        changeFOV(true, -1.0);
                     }
                     generateShadowMask(gshadowTex, gscreenWidth, gscreenHeight);
                 }
@@ -396,25 +398,49 @@ bool handleInput()
                             }
                             break;
                         }
-                        case SDLK_TAB:
-                        {
-                            if (SDL_GetRelativeMouseMode() == SDL_bool(true))
-                                SDL_SetRelativeMouseMode(SDL_bool(false));
-                            else
-                                SDL_SetRelativeMouseMode(SDL_bool(true));
-                            break;
-                        }
-                        case SDLK_MINUS:
+                        case SDLK_DELETE:
                         {
                             if (mouseSense > 0.05)
                                 mouseSense -= 0.05;
                             break;
                         }
-                        case SDLK_EQUALS:
+                        case SDLK_INSERT:
                         {
                             mouseSense += 0.05;
                             if (mouseSense >= 5)
                                 mouseSense = 5;
+                            break;
+                        }
+                        case SDLK_HOME:
+                        {
+                            minBrightness = std::min(255, minBrightness+10);
+                            generateShadowMask(gshadowTex, gscreenWidth, gscreenHeight);
+                            break;
+                        }
+                        case SDLK_END:
+                        {
+                            minBrightness = std::max(1, minBrightness-10);
+                            generateShadowMask(gshadowTex, gscreenWidth, gscreenHeight);
+                            break;
+                        }
+                        case SDLK_PAGEUP:
+                        {
+                            torchBrightness = std::min(1.0, torchBrightness+0.04);
+                            generateShadowMask(gshadowTex, gscreenWidth, gscreenHeight);
+                            break;
+                        }
+                        case SDLK_PAGEDOWN:
+                        {
+                            torchBrightness = std::max(0.04, torchBrightness-0.04);
+                            generateShadowMask(gshadowTex, gscreenWidth, gscreenHeight);
+                            break;
+                        }
+                        case SDLK_F7:
+                        {
+                            if (SDL_GetRelativeMouseMode() == SDL_bool(true))
+                                SDL_SetRelativeMouseMode(SDL_bool(false));
+                            else
+                                SDL_SetRelativeMouseMode(SDL_bool(true));
                             break;
                         }
                         case SDLK_F8:
@@ -466,6 +492,17 @@ bool handleInput()
                 }
                 break;
             }
+            /*case(SDL_KEYUP):
+            {
+                switch (e.key.keysym.sym)
+                {
+                    default:
+                    {
+                        break;
+                    }
+                }
+                break;
+            }*/
             case(SDL_WINDOWEVENT):
             {
                 if (e.window.event == SDL_WINDOWEVENT_RESIZED || e.window.event == SDL_WINDOWEVENT_SIZE_CHANGED)
@@ -492,7 +529,9 @@ bool handleInput()
     if(++framecounter >= SDL_GetPerformanceFrequency() / moveSpeed / 5)
     {
         framecounter = 0;
-        ssFPS << "Raycast Test. FPS: " << std::fixed << std::setprecision(2) << std::setfill('0') << std::setw(6) << (double)SDL_GetPerformanceFrequency() / moveSpeed << " | Vsync: " << vertSyncOn;
+        ssFPS << "Raycast Test. FPS: " << std::fixed << std::setprecision(2) << std::setfill('0') << std::setw(6) << (double)SDL_GetPerformanceFrequency() / moveSpeed
+              << " | Vsync: " << vertSyncOn
+              << " | FOV: "   << hFOV;
         SDL_SetWindowTitle(gwindow, ssFPS.str().c_str());
         ssFPS.str(std::string()); //blank the stream
     }
@@ -515,6 +554,11 @@ bool handleInput()
     {
         moveSpeed *= 0.707;
     }
+    //sprint by holding shift
+    if (currentKeyStates[SDL_SCANCODE_LSHIFT] || currentKeyStates[SDL_SCANCODE_RSHIFT])
+    {     
+        moveSpeed *= 1.5;
+    }    
 
     //Act on keypresses
     if (currentKeyStates[SDL_SCANCODE_ESCAPE]) //Pressed escape, close window
@@ -560,16 +604,6 @@ bool handleInput()
         if (leveldata[int(posX)][int(posY + planeY * (moveSpeed + 0.3))] == false)
             if (leveldata[int(posX)][int(posY + planeY * moveSpeed)] == false)
                 posY += planeY * moveSpeed;
-    }
-    if(currentKeyStates[SDL_SCANCODE_9])  //adjust min/max bright?
-    {
-        minBrightness = std::max(1, minBrightness-10);
-        generateShadowMask(gshadowTex, gscreenWidth, gscreenHeight);
-    }
-    if(currentKeyStates[SDL_SCANCODE_0])
-    {
-        minBrightness = std::min(255, 10+minBrightness);
-        generateShadowMask(gshadowTex, gscreenWidth, gscreenHeight);
     }
     if ((currentKeyStates[SDL_SCANCODE_Q] || mouseXDist < 0)&&currentKeyStates[SDL_SCANCODE_E]==false) //turn left
     {
@@ -1208,7 +1242,7 @@ void newlevel(bool warpView)
         dirX = 1;
         dirY = 0;        
         planeX = 0;
-        planeY = (hFOV/90.0);
+        planeY = std::tan((hFOV*degToRad)/2);
         viewTrip = 0;
         enableInput = true;
 }
@@ -1244,4 +1278,23 @@ void loadLevel(std::string path)
     }
 
     mapFile.close();
+}
+
+void changeFOV(bool rel, double newFOV)
+{
+    if(rel)
+    {
+        double mult = (hFOV + newFOV)/hFOV;
+        hFOV += newFOV;
+        planeY *= mult;
+        planeX *= mult;
+    }
+    else
+    {
+        double mult = newFOV/hFOV;
+        hFOV = newFOV;
+        planeY *= mult;
+        planeX *= mult;
+    }
+    
 }
