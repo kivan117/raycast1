@@ -24,7 +24,8 @@ int minBrightness = 0x01;
 double torchBrightness = 1; // 0 - 1; multipler affecting torch light radius around player
 
 bool vertSyncOn = true;
-double currentDist[gscreenHeight];
+double floorDist[gscreenHeight];
+double ceilDist[gscreenHeight];
 double brightSin[gscreenWidth];
 
 const double radToDeg = 180 / M_PI;
@@ -32,6 +33,8 @@ const double degToRad = M_PI / 180;
 
 const double vFOV = 60.0;
 double hFOV = 75.0;
+int vertLook = 0;  // number of pixels to look up/down
+
 bool sprinting = false;
 
 double planeX = 0, planeY = std::tan((hFOV * degToRad)/2);
@@ -156,7 +159,7 @@ bool initWindow()
 {
     bool success = true;
     //create window
-    gwindow = SDL_CreateWindow("Raycast Test. FPS: ", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, gscreenWidth, gscreenHeight, SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_RESIZABLE);
+    gwindow = SDL_CreateWindow("Raycast Test. FPS: ", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, gscreenWidth, gscreenHeight, SDL_WINDOW_OPENGL | SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_RESIZABLE);
     if (gwindow == NULL) //window failed to create?
     {
         success = false;
@@ -294,9 +297,12 @@ bool initTextures()
     }
     else
     {
-        for(int y = 0; y < gscreenHeight; y++) //define a height table for floor calculations later
+        for(int y = 0; y < gscreenHeight; y++) //define a height table for floor and ceiling calculations later
         {
-            currentDist[y] = (gscreenHeight) / (2.0*y - (gscreenHeight));
+            //floorDist[y] = (gscreenHeight) / ((2.0*(y-vertLook) - (gscreenHeight)));
+            //ceilDist[y] = (gscreenHeight) / ((2.0*(y+vertLook) - (gscreenHeight)));
+            floorDist[y] = (gscreenHeight) / ((2.0*(y-vertLook) - (gscreenHeight)));
+            ceilDist[y] = (gscreenHeight) / ((2.0*(y+vertLook) - (gscreenHeight)));
         }
         for(int x = 0; x < gscreenWidth; x++) //setup a sin lookup table for the shadow mask for later
         {
@@ -321,7 +327,8 @@ bool handleInput()
 {
     bool quit = false;
     bool moveFwd = false;
-    int mouseXDist = 0;
+    int mouseXDist = 0, mouseYDist = 0;
+
 
     //Event handler
     SDL_Event e;
@@ -344,6 +351,7 @@ bool handleInput()
             {
                 if(enableInput)
                     mouseXDist = e.motion.xrel;
+                    mouseYDist = e.motion.yrel;
                 break;
             }
             case(SDL_MOUSEWHEEL):  //if scroll mousewheel, change horizontal field of view
@@ -544,7 +552,30 @@ bool handleInput()
         rotSpeed *= mouseXDist * mouseSense;
     else if (mouseXDist < 0)
         rotSpeed *= mouseXDist * -mouseSense;
-
+    if (mouseYDist > 0 && vertLook > -(gscreenHeight/2)) // look up
+    {
+        vertLook -= 1;
+        for(int y = 0; y < gscreenHeight; y++) //define a height table for floor and ceiling calculations later
+        {
+            //floorDist[y] = (gscreenHeight) / ((2.0*(y-vertLook) - (gscreenHeight)));
+            //ceilDist[y] = (gscreenHeight) / ((2.0*(y+vertLook) - (gscreenHeight)));
+            floorDist[y] = (gscreenHeight) / ((2.0*(y-vertLook) - (gscreenHeight)));
+            ceilDist[y] = (gscreenHeight) / ((2.0*(y+vertLook) - (gscreenHeight)));
+        }
+        generateShadowMask(gshadowTex, gscreenWidth, gscreenHeight);
+    }
+    else if (mouseYDist < 0 && vertLook < (gscreenHeight / 2))
+    {
+        vertLook += 1;
+        for(int y = 0; y < gscreenHeight; y++) //define a height table for floor and ceiling calculations later
+        {
+            //floorDist[y] = (gscreenHeight) / ((2.0*(y-vertLook) - (gscreenHeight)));
+            //ceilDist[y] = (gscreenHeight) / ((2.0*(y+vertLook) - (gscreenHeight)));
+            floorDist[y] = (gscreenHeight) / ((2.0*(y-vertLook) - (gscreenHeight)));
+            ceilDist[y] = (gscreenHeight) / ((2.0*(y+vertLook) - (gscreenHeight)));
+        }
+        generateShadowMask(gshadowTex, gscreenWidth, gscreenHeight);
+    }
     double oldDirX = dirX;
     double oldPlaneX = planeX;
 
@@ -910,8 +941,8 @@ void drawWorldGeoTex(double* wallDist, int* side, int* mapX, int* mapY)  /* TODO
             texX = gtexWidth - texX - 1;
 
         //calculate lowest and highest pixel to fill in current stripe
-        drawStart = -lineHeight / 2 + gscreenHeight / 2;
-        drawEnd = lineHeight / 2 + gscreenHeight / 2;
+        drawStart = -lineHeight / 2 + (gscreenHeight / 2) + vertLook;
+        drawEnd = lineHeight / 2 + (gscreenHeight / 2) + vertLook;
 
         // set up the rectangle to sample the texture for the wall
         SDL_Rect line = {x, drawStart, 1, drawEnd - drawStart};
@@ -953,7 +984,7 @@ void drawFloor(double* wallDist, int* side, int* mapX, int* mapY)
         //Calculate height of line to draw on screen
         lineHeight = (int)(gscreenHeight / wallDist[x]);
         //calculate lowest and highest pixel to fill in current stripe
-        drawEnd = lineHeight / 2 + gscreenHeight / 2;
+        drawEnd = (lineHeight / 2) + (gscreenHeight / 2) + vertLook;
         cameraX = 2 * x / double(gscreenWidth) - 1; //x-coordinate in camera space, or along the x of the camera plane itself
         rayDirX = dirX + planeX * cameraX; //the XY coord where the vector of this ray crosses the camera plane
         rayDirY = dirY + planeY * cameraX;
@@ -990,14 +1021,18 @@ void drawFloor(double* wallDist, int* side, int* mapX, int* mapY)
         // alters the pixel width of the floor that's used to show depth
         // distPlayer values other than 0.0 will warp the floor/ceiling curvature. (+) values will curve "up" towards the player, and (-) values dropping downward
 
-        if (drawEnd < 0)
+        if (drawEnd > gscreenHeight || drawEnd < 0)
             drawEnd = gscreenHeight; //becomes < 0 when the integer overflows
 
         //draw the floor from drawEnd to the bottom of the screen
+        for (int y = 0; y < drawEnd; y++)
+        {
+            bufferPixels[y * gscreenWidth + x] = 0;
+        }
         for (int y = drawEnd; y < gscreenHeight; y++)
         {
 
-            weight = (currentDist[y] - distPlayer) / (wallDist[x] - distPlayer);
+            weight = (floorDist[y] - distPlayer) / (wallDist[x] - distPlayer);
 
             currentFloorX = weight * floorXWall + (1.0 - weight) * posX;
             currentFloorY = weight * floorYWall + (1.0 - weight) * posY;
@@ -1008,17 +1043,22 @@ void drawFloor(double* wallDist, int* side, int* mapX, int* mapY)
 
             //shitty slow version. need to find a way to go faster than streaming textures and a buffer texture
             bufferPixels[y * gscreenWidth + x] = ufloorTexPix[gtexWidth * floorTexY + floorTexX];
-
-            if(ceilingOn)
+        }
+        
+        if(ceilingOn)
+        {
+            for (int y = gscreenHeight - drawEnd; y < gscreenHeight; y++)
             {
+
+                weight = (ceilDist[y] - distPlayer) / (wallDist[x] - distPlayer);
+
+                currentFloorX = weight * floorXWall + (1.0 - weight) * posX;
+                currentFloorY = weight * floorYWall + (1.0 - weight) * posY;
                 SDL_QueryTexture(gceilTex, NULL, NULL, &gtexWidth, &gtexHeight);
                 floorTexX = int(currentFloorX * gtexWidth) % gtexWidth;
                 floorTexY = int(currentFloorY * gtexHeight) % gtexHeight;
+
                 bufferPixels[(gscreenHeight - y - 1) * gscreenWidth + x] = uceilTexPix[gtexWidth * floorTexY + floorTexX];
-            }
-            else
-            {
-                bufferPixels[(gscreenHeight - y - 1) * gscreenWidth + x] = 0;
             }
         }
     }
@@ -1176,7 +1216,7 @@ SDL_Texture *loadImageColorKey(std::string path)
     return tex;
 }
 
-void generateShadowMask(SDL_Texture* tex, int texWidth, int texHeight)
+void generateShadowMask(SDL_Texture* tex, int texWidth, int texHeight) //TODO: fix floor / ceil with look up/down
 {
 
     void* texPix = NULL;
@@ -1188,14 +1228,24 @@ void generateShadowMask(SDL_Texture* tex, int texWidth, int texHeight)
     SDL_QueryTexture(tex, &format, NULL, NULL, NULL);
     SDL_PixelFormat *mappingFormat = SDL_AllocFormat(format);
     double tempBright = 0; //variable to offset torchbrightness by sin lookup table for each column, giving a nice curved radius to the torch fade
-    for(int y = 0; y < texHeight/2; y++)
+    for(int y = 0; y < texHeight/2 + vertLook; y++)
     {
-        brightness = std::max((double)minBrightness,255.0*torchBrightness/currentDist[texHeight-y]);
+        brightness = std::min(255.0,255.0*std::max((double)minBrightness/255.0,torchBrightness/(ceilDist[texHeight-y])));
         for(int x = 0; x < texWidth; x++)
         {
-            tempBright = std::max((double)minBrightness, brightness * brightSin[x]);
+            tempBright = std::min(255.0,std::max((double)minBrightness, brightness * brightSin[x]));
             pixels[y * texWidth + x] = SDL_MapRGBA(mappingFormat, tempBright, tempBright, tempBright, 0xff);
-            pixels[(texHeight - y - 1) * texWidth + x] = SDL_MapRGBA(mappingFormat, tempBright, tempBright, tempBright, 0xff);
+            //pixels[(texHeight - y - 1) * texWidth + x] = SDL_MapRGBA(mappingFormat, tempBright, tempBright, tempBright, 0xff);
+        }
+    }
+    for(int y = texHeight/2 + vertLook; y < texHeight; y++)
+    {
+        brightness = std::min(255.0,255.0*std::max((double)minBrightness/255.0,torchBrightness/(floorDist[y])));
+        for(int x = 0; x < texWidth; x++)
+        {
+            tempBright = std::min(255.0,std::max((double)minBrightness, brightness * brightSin[x]));
+            //pixels[y * texWidth + x] = SDL_MapRGBA(mappingFormat, tempBright, tempBright, tempBright, 0xff);
+            pixels[(y) * texWidth + x] = SDL_MapRGBA(mappingFormat, tempBright, tempBright, tempBright, 0xff);
         }
     }
     SDL_FreeFormat(mappingFormat);
