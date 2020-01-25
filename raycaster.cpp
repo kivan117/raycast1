@@ -299,8 +299,6 @@ bool initTextures()
     {
         for(int y = 0; y < gscreenHeight; y++) //define a height table for floor and ceiling calculations later
         {
-            //floorDist[y] = (gscreenHeight) / ((2.0*(y-vertLook) - (gscreenHeight)));
-            //ceilDist[y] = (gscreenHeight) / ((2.0*(y+vertLook) - (gscreenHeight)));
             floorDist[y] = (gscreenHeight) / ((2.0*(y-vertLook) - (gscreenHeight)));
             ceilDist[y] = (gscreenHeight) / ((2.0*(y+vertLook) - (gscreenHeight)));
         }
@@ -556,7 +554,9 @@ bool handleInput()
         rotSpeed *= mouseXDist * -mouseSense;
     if (mouseYDist > 0 && vertLook > ( (-1.0)*gscreenHeight / 2)) // look down
     {
-        vertLook -= 1;
+        vertLook -= mouseYDist * mouseSense;
+        if(vertLook < ( (-1.0)*gscreenHeight / 2))
+            vertLook = ( (-1.0)*gscreenHeight / 2);
         for(int y = 0; y < gscreenHeight; y++) //define a height table for floor and ceiling calculations later
         {
             floorDist[y] = (gscreenHeight) / ((2.0*(y-vertLook) - (gscreenHeight)));
@@ -566,7 +566,9 @@ bool handleInput()
     }
     else if (mouseYDist < 0 && vertLook < (gscreenHeight / 2)) //look up
     {
-        vertLook += 1;
+        vertLook -= mouseYDist * mouseSense;
+        if(vertLook > (gscreenHeight / 2))
+            vertLook = (gscreenHeight / 2);
         for(int y = 0; y < gscreenHeight; y++) //define a height table for floor and ceiling calculations later
         {
             floorDist[y] = (gscreenHeight) / ((2.0*(y-vertLook) - (gscreenHeight)));
