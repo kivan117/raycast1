@@ -31,9 +31,10 @@ double brightSin[gscreenWidth];
 const double radToDeg = 180 / M_PI;
 const double degToRad = M_PI / 180;
 
-const double vFOV = 60.0;
-double hFOV = 75.0;
+const double vFOV = 60.0; //this is just an unused assumed number at the moment
+double hFOV = 90.0;
 int vertLook = 0;  // number of pixels to look up/down
+double vertHeight = 0;
 
 bool sprinting = false;
 
@@ -88,6 +89,7 @@ void calcRaycast();
 void drawWorldGeoFlat(double* wallDist, int* side, int* mapX, int* mapY);
 void drawWorldGeoTex(double* wallDist, int* side, int* mapX, int* mapY);
 void drawFloor(double* wallDist, int* side, int* mapX, int* mapY);
+void drawSkyBox();
 void close();
 // loads a BMP image into a texture on the rendering device
 SDL_Texture *loadTexture(const std::string &file, SDL_Renderer *ren);
@@ -368,7 +370,8 @@ bool handleInput()
                     {
                         changeFOV(true, -1.0);
                     }
-                    generateShadowMask(gshadowTex, gscreenWidth, gscreenHeight);
+                    if(ceilingOn && !debugColors)
+                        generateShadowMask(gshadowTex, gscreenWidth, gscreenHeight);
                 }
 
                 break;
@@ -471,6 +474,8 @@ bool handleInput()
                         case SDLK_F9:
                         {
                             ceilingOn = !(ceilingOn);
+                            if(ceilingOn && !debugColors)
+                                generateShadowMask(gshadowTex, gscreenWidth, gscreenHeight);
                             break;
                         }
                         case SDLK_F10:
@@ -540,7 +545,7 @@ bool handleInput()
         framecounter = 0;
         ssFPS << "Raycast Test. FPS: " << std::fixed << std::setprecision(2) << std::setfill('0') << std::setw(6) << (double)SDL_GetPerformanceFrequency() / moveSpeed
               << " | Vsync: " << vertSyncOn
-              << " | FOV: "   << hFOV;
+              << " | Height: "   << vertHeight;
         SDL_SetWindowTitle(gwindow, ssFPS.str().c_str());
         ssFPS.str(std::string()); //blank the stream
     }
@@ -560,8 +565,8 @@ bool handleInput()
             vertLook = ( (-1.0)*gscreenHeight / 2);
         for(int y = 0; y < gscreenHeight; y++) //define a height table for floor and ceiling calculations later
         {
-            floorDist[y] = (gscreenHeight) / ((2.0*(y-vertLook) - (gscreenHeight)));
-            ceilDist[y] = (gscreenHeight) / ((2.0*(y+vertLook) - (gscreenHeight)));
+            floorDist[y] = (gscreenHeight+(2*vertHeight)) / ((2.0*(y-vertLook) - (gscreenHeight)));
+            ceilDist[y] = (gscreenHeight-(2*vertHeight)) / ((2.0*(y+vertLook) - (gscreenHeight)));
         }
         int tw, th;
         SDL_QueryTexture(gskyTex, NULL, NULL, &tw, &th);
@@ -569,7 +574,8 @@ bool handleInput()
         if(gskySrcRect.y > th - gskySrcRect.h)
              gskySrcRect.y = th - gskySrcRect.h;
 
-        generateShadowMask(gshadowTex, gscreenWidth, gscreenHeight);
+        if(ceilingOn && !debugColors)
+            generateShadowMask(gshadowTex, gscreenWidth, gscreenHeight);
     }
     else if (mouseYDist < 0 && vertLook < (gscreenHeight / 2)) //look up
     {
@@ -578,23 +584,24 @@ bool handleInput()
             vertLook = (gscreenHeight / 2);
         for(int y = 0; y < gscreenHeight; y++) //define a height table for floor and ceiling calculations later
         {
-            floorDist[y] = (gscreenHeight) / ((2.0*(y-vertLook) - (gscreenHeight)));
-            ceilDist[y] = (gscreenHeight) / ((2.0*(y+vertLook) - (gscreenHeight)));
+            floorDist[y] = (gscreenHeight+(2*vertHeight)) / ((2.0*(y-vertLook) - (gscreenHeight)));
+            ceilDist[y] = (gscreenHeight-(2*vertHeight)) / ((2.0*(y+vertLook) - (gscreenHeight)));
         }
         int tw, th;
         SDL_QueryTexture(gskyTex, NULL, NULL, &tw, &th);
         gskySrcRect.y = (int)std::round(((double)th/2.0 - (double)gskySrcRect.h/2.0) - ((double)vertLook * ((double)gskySrcRect.h/(double)gskyDestRect.h)));
         if (gskySrcRect.y < 0)
             gskySrcRect.y = 0;
-        
-        generateShadowMask(gshadowTex, gscreenWidth, gscreenHeight);
+        if(ceilingOn && !debugColors)
+            generateShadowMask(gshadowTex, gscreenWidth, gscreenHeight);
     }
     double oldDirX = dirX;
     double oldPlaneX = planeX;
 
     //when running forward or backward while strafing, your total displacement is effectively multplied by sqrt(2)
     //so we're just dividing speed by sqrt(2) in this situation to limit total displacement to normal values
-    if ((currentKeyStates[SDL_SCANCODE_W] ^ currentKeyStates[SDL_SCANCODE_S]) && (currentKeyStates[SDL_SCANCODE_A] ^ currentKeyStates[SDL_SCANCODE_D]))
+    if (((currentKeyStates[SDL_SCANCODE_W] || currentKeyStates[SDL_SCANCODE_UP]) ^ (currentKeyStates[SDL_SCANCODE_S] || currentKeyStates[SDL_SCANCODE_DOWN]))
+       && ((currentKeyStates[SDL_SCANCODE_A] || currentKeyStates[SDL_SCANCODE_LEFT]) ^ (currentKeyStates[SDL_SCANCODE_D] || currentKeyStates[SDL_SCANCODE_RIGHT])))
     {
         moveSpeed *= 0.707;
     }
@@ -667,7 +674,32 @@ bool handleInput()
         planeX = planeX * cos(rotSpeed) - planeY * sin(rotSpeed);
         planeY = oldPlaneX * sin(rotSpeed) + planeY * cos(rotSpeed);
     }
-
+    if(currentKeyStates[SDL_SCANCODE_Z])
+    {
+        vertHeight -= 1;
+        if(vertHeight < (-gscreenHeight/5))
+            vertHeight = (-gscreenHeight/5);
+        for(int y = 0; y < gscreenHeight; y++) //define a height table for floor and ceiling calculations later
+        {
+            floorDist[y] = (gscreenHeight+(2*vertHeight)) / ((2.0*(y-vertLook) - (gscreenHeight)));
+            ceilDist[y] = (gscreenHeight-(2*vertHeight)) / ((2.0*(y+vertLook) - (gscreenHeight)));
+        }
+        if(ceilingOn && !debugColors)
+            generateShadowMask(gshadowTex, gscreenWidth, gscreenHeight);
+    }
+    else if(currentKeyStates[SDL_SCANCODE_X])
+    {
+        vertHeight += 1;
+        if(vertHeight > (2*gscreenHeight/5))
+            vertHeight = (2*gscreenHeight/5);
+        for(int y = 0; y < gscreenHeight; y++) //define a height table for floor and ceiling calculations later
+        {
+            floorDist[y] = (gscreenHeight+(2*vertHeight)) / ((2.0*(y-vertLook) - (gscreenHeight)));
+            ceilDist[y] = (gscreenHeight-(2*vertHeight)) / ((2.0*(y+vertLook) - (gscreenHeight)));
+        }
+        if(ceilingOn && !debugColors)
+            generateShadowMask(gshadowTex, gscreenWidth, gscreenHeight);
+    }
     return quit;
 }
 void updateScreen()
@@ -858,10 +890,10 @@ void drawWorldGeoFlat(double* wallDist, int* side, int* mapX, int* mapY)
         }
 
         //calculate lowest and highest pixel to fill in current stripe
-        drawStart = -lineHeight / 2 + gscreenHeight / 2;
+        drawStart = -(lineHeight / 2) + (gscreenHeight / 2) + (vertHeight / wallDist[x]) + vertLook;
         if (drawStart < 0)
             drawStart = 0;
-        drawEnd = lineHeight / 2 + gscreenHeight / 2;
+        drawEnd = (lineHeight / 2) + (gscreenHeight / 2) + (vertHeight / wallDist[x]) + vertLook;
         if (drawEnd >= gscreenHeight)
             drawEnd = gscreenHeight - 1;
 
@@ -876,47 +908,7 @@ void drawWorldGeoTex(double* wallDist, int* side, int* mapX, int* mapY)  /* TODO
 {
     if(ceilingOn == false)
     {
-        //Here I'm creating a sky box and rotating it according to player's viewing angle
-        //trying to match drawn sky segment to FOV
-        //skybox is 900 pix wide, FOV is ~75 degrees, so we can see ~188 pixels at a time
-
-        //all of these hard coded values are dependent on the sky texture resolution, but not the game resolution
-        //altering the game FOV will make the values wrong though
-        //need to make it calculated based on FOV and sky texture dimensions
-        
-        double angle = atan2(dirY, dirX) * radToDeg; // gets view dir in degrees
-
-        if (angle < 0)
-            angle += 360;
-        
-        int tw, th;
-        SDL_QueryTexture(gskyTex, NULL, NULL, &tw, &th); //get texture width and height
-        angle *= (double)tw/360.0; //converts 360 degress to texture width
-
-        angle = round(angle); //no fractional pixels allowed
-         if (angle > tw)
-             angle -= tw;
-         if (angle < 0)
-             angle += tw;
-        gskySrcRect.x = angle;
-        if(tw - gskySrcRect.x < gskySrcRect.w) //reached end of texture and need to draw sky in two parts
-        {
-            //draw first part, wrap to 0, draw rest
-            SDL_Rect tempSrc = gskySrcRect;
-            SDL_Rect tempDest = gskyDestRect;
-            tempSrc.w = tw - tempSrc.x;
-            tempDest.w = (int)((double)tempSrc.w * ((double)gskyDestRect.w / (double)gskySrcRect.w));
-            SDL_RenderCopy(gRenderer, gskyTex, &tempSrc, &tempDest);
-
-            tempSrc.x = 0;
-            tempSrc.w = gskySrcRect.w - tempSrc.w;
-            tempDest.x += tempDest.w;
-            tempDest.w = gskyDestRect.w - tempDest.w;
-            SDL_RenderCopy(gRenderer, gskyTex, &tempSrc, &tempDest);
-
-        }
-        else //safe to draw entire sky rect at once
-            SDL_RenderCopy(gRenderer, gskyTex, &gskySrcRect, &gskyDestRect); //now paste our chunk of sky onto the renderer
+        drawSkyBox();
     }
 
     drawFloor(wallDist, side, mapX, mapY);
@@ -974,8 +966,8 @@ void drawWorldGeoTex(double* wallDist, int* side, int* mapX, int* mapY)  /* TODO
             texX = gtexWidth - texX - 1;
 
         //calculate lowest and highest pixel to fill in current stripe
-        drawStart = -lineHeight / 2 + (gscreenHeight / 2) + vertLook;
-        drawEnd = lineHeight / 2 + (gscreenHeight / 2) + vertLook;
+        drawStart = -lineHeight / 2 + (gscreenHeight / 2) + (vertHeight / wallDist[x]) + vertLook;
+        drawEnd = lineHeight / 2 + (gscreenHeight / 2) + (vertHeight / wallDist[x]) + vertLook;
 
         // set up the rectangle to sample the texture for the wall
         SDL_Rect line = {x, drawStart, 1, drawEnd - drawStart};
@@ -1017,7 +1009,7 @@ void drawFloor(double* wallDist, int* side, int* mapX, int* mapY)
         //Calculate height of line to draw on screen
         lineHeight = (int)(gscreenHeight / wallDist[x]);
         //calculate lowest and highest pixel to fill in current stripe
-        drawEnd = (lineHeight / 2) + (gscreenHeight / 2) + vertLook;
+        drawEnd = (lineHeight / 2) + (gscreenHeight / 2) + (vertHeight / wallDist[x]) + vertLook;
         cameraX = 2 * x / double(gscreenWidth) - 1; //x-coordinate in camera space, or along the x of the camera plane itself
         rayDirX = dirX + planeX * cameraX; //the XY coord where the vector of this ray crosses the camera plane
         rayDirY = dirY + planeY * cameraX;
@@ -1078,7 +1070,7 @@ void drawFloor(double* wallDist, int* side, int* mapX, int* mapY)
         
         if(ceilingOn)
         {
-            drawEnd = (lineHeight / 2) + (gscreenHeight / 2) + vertLook;
+            drawEnd = (lineHeight / 2) + (gscreenHeight / 2) + (vertHeight / wallDist[x]) + vertLook;
             SDL_QueryTexture(gceilTex, NULL, NULL, &gtexWidth, &gtexHeight);
             for (int y = gscreenHeight - drawEnd + lineHeight; y < gscreenHeight; y++)
             {
@@ -1110,6 +1102,51 @@ void drawFloor(double* wallDist, int* side, int* mapX, int* mapY)
     }
 
 
+}
+
+void drawSkyBox()
+{
+    //Here I'm creating a sky box and rotating it according to player's viewing angle
+        //trying to match drawn sky segment to FOV
+        //skybox is 900 pix wide, FOV is ~75 degrees, so we can see ~188 pixels at a time
+
+        //all of these hard coded values are dependent on the sky texture resolution, but not the game resolution
+        //altering the game FOV will make the values wrong though
+        //need to make it calculated based on FOV and sky texture dimensions
+        
+        double angle = atan2(dirY, dirX) * radToDeg; // gets view dir in degrees
+
+        if (angle < 0)
+            angle += 360;
+        
+        int tw, th;
+        SDL_QueryTexture(gskyTex, NULL, NULL, &tw, &th); //get texture width and height
+        angle *= (double)tw/360.0; //converts 360 degress to texture width
+
+        angle = round(angle); //no fractional pixels allowed
+         if (angle > tw)
+             angle -= tw;
+         if (angle < 0)
+             angle += tw;
+        gskySrcRect.x = angle;
+        if(tw - gskySrcRect.x < gskySrcRect.w) //reached end of texture and need to draw sky in two parts
+        {
+            //draw first part, wrap to 0, draw rest
+            SDL_Rect tempSrc = gskySrcRect;
+            SDL_Rect tempDest = gskyDestRect;
+            tempSrc.w = tw - tempSrc.x;
+            tempDest.w = (int)((double)tempSrc.w * ((double)gskyDestRect.w / (double)gskySrcRect.w));
+            SDL_RenderCopy(gRenderer, gskyTex, &tempSrc, &tempDest);
+
+            tempSrc.x = 0;
+            tempSrc.w = gskySrcRect.w - tempSrc.w;
+            tempDest.x += tempDest.w;
+            tempDest.w = gskyDestRect.w - tempDest.w;
+            SDL_RenderCopy(gRenderer, gskyTex, &tempSrc, &tempDest);
+
+        }
+        else //safe to draw entire sky rect at once
+            SDL_RenderCopy(gRenderer, gskyTex, &gskySrcRect, &gskyDestRect); //now paste our chunk of sky onto the renderer
 }
 
 void close()
@@ -1307,7 +1344,7 @@ void newlevel(bool warpView)
         {
             for(int i = 0; i < 50; i++)
             {
-                viewTrip -= 0.2; //make floor and ceiling appear to stretch / fall away. acid trip effect
+                viewTrip -= 0.2; //make floor and ceiling appear to stretch / fall away. acid trip effect. just for fun
 
                 updateScreen();
                 SDL_Delay(20);
@@ -1328,6 +1365,8 @@ void newlevel(bool warpView)
         dirY = 0;        
         planeX = 0;
         planeY = std::tan((hFOV*degToRad)/2);
+        vertLook = 0;
+        vertHeight = 0;
         viewTrip = 0;
         enableInput = true;
 }

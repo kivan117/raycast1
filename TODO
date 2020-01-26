@@ -1,4 +1,4 @@
-Add height / jump / crouch
+Fix Vertlook so it's not FPS locked
 Floor cast horizontally
 Improve shadow texture performance
 Add objects with sprites
