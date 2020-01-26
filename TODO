@@ -1,9 +1,8 @@
-Fix Vertlook so it's not FPS locked
-Floor cast horizontally
+Variable height walls
+Floor cast horizontally?
 Improve shadow texture performance
 Add objects with sprites
 Animate doors
 Transparent walls
-Variable height walls
 Mirrors / Portals
 Config file

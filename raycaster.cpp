@@ -33,7 +33,7 @@ const double degToRad = M_PI / 180;
 
 const double vFOV = 60.0; //this is just an unused assumed number at the moment
 double hFOV = 90.0;
-int vertLook = 0;  // number of pixels to look up/down
+double vertLook = 0;  // number of pixels to look up/down
 double vertHeight = 0;
 
 bool sprinting = false;
@@ -180,8 +180,15 @@ bool initWindow()
         }
         else
         {
+            #ifdef _WIN32
+            //this nonsense is because of a bug with windows 10
+            //without it, the mouse won't actually be captured
+            //the relative input will work, but until the user minimizes and restores the window, it isn't captured
+            SDL_MinimizeWindow(gwindow);
+            SDL_RaiseWindow(gwindow);
+            SDL_RestoreWindow(gwindow);
+            #endif
             SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0"); //explicitly request nearest neighbor scaling
-            
             gfloorRect.x = 0;
             gfloorRect.y = gscreenHeight / 2;
             gfloorRect.w = gscreenWidth;
@@ -191,14 +198,6 @@ bool initWindow()
             gskyDestRect.w = gscreenWidth;
             gskyDestRect.h = gscreenHeight;//  /2;
             SDL_SetRelativeMouseMode(SDL_bool(true)); // lock the cursor to the window, now that we have focus
-#ifdef _WIN32
-            //this nonsense is because of a bug with windows 10
-            //without it, the mouse won't actually be captured
-            //the relative input will work, but until the user minimizes and restores the window, it isn't captured
-            SDL_MinimizeWindow(gwindow);
-            SDL_RaiseWindow(gwindow);
-            SDL_RestoreWindow(gwindow);
-#endif
         }
     }
     return success;
@@ -348,15 +347,15 @@ bool handleInput()
                 quit = true;
                 break;
             }
-            case(SDL_MOUSEMOTION):
-            {
-                if(enableInput)
-                {
-                    mouseXDist = e.motion.xrel;
-                    mouseYDist = e.motion.yrel;
-                }
-                break;
-            }
+            // case(SDL_MOUSEMOTION):
+            // {
+            //     if(enableInput)
+            //     {
+            //         mouseXDist = e.motion.xrel;
+            //         mouseYDist = e.motion.yrel;
+            //     }
+            //     break;
+            // }
             case(SDL_MOUSEWHEEL):  //if scroll mousewheel, change horizontal field of view
             {
                 if (enableInput)
@@ -536,6 +535,8 @@ bool handleInput()
         }
     }
 
+    SDL_GetRelativeMouseState(&mouseXDist,&mouseYDist);
+
     const Uint8 *currentKeyStates = SDL_GetKeyboardState(NULL);
     gtime = SDL_GetPerformanceCounter();
     moveSpeed = (gtime - oldtime);
@@ -551,16 +552,9 @@ bool handleInput()
     }
     if(moveSpeed == 0)
         moveSpeed = 1;
-    
-    moveSpeed = moveSpeed /(double)SDL_GetPerformanceFrequency() * 4; //effectively convert to seconds by /1000, then mult by 4. value is grid squares / sec
-    double rotSpeed = moveSpeed/2; //the value is in radians/second
-    if (mouseXDist > 0)
-        rotSpeed *= mouseXDist * mouseSense;
-    else if (mouseXDist < 0)
-        rotSpeed *= mouseXDist * -mouseSense;
     if (mouseYDist > 0 && vertLook > ( (-1.0)*gscreenHeight / 2)) // look down
     {
-        vertLook -= mouseYDist * mouseVertSense;
+        vertLook -= mouseYDist*mouseVertSense;
         if(vertLook < ( (-1.0)*gscreenHeight / 2))
             vertLook = ( (-1.0)*gscreenHeight / 2);
         for(int y = 0; y < gscreenHeight; y++) //define a height table for floor and ceiling calculations later
@@ -579,7 +573,7 @@ bool handleInput()
     }
     else if (mouseYDist < 0 && vertLook < (gscreenHeight / 2)) //look up
     {
-        vertLook -= mouseYDist * mouseVertSense;
+        vertLook -= mouseYDist*mouseVertSense;
         if(vertLook > (gscreenHeight / 2))
             vertLook = (gscreenHeight / 2);
         for(int y = 0; y < gscreenHeight; y++) //define a height table for floor and ceiling calculations later
@@ -595,6 +589,12 @@ bool handleInput()
         if(ceilingOn && !debugColors)
             generateShadowMask(gshadowTex, gscreenWidth, gscreenHeight);
     }
+    moveSpeed = moveSpeed /(double)SDL_GetPerformanceFrequency() * 4; //effectively convert to seconds by /1000, then mult by 4. value is grid squares / sec
+    double rotSpeed = moveSpeed/2; //the value is in radians/second
+    if (mouseXDist > 0)
+        rotSpeed *= mouseXDist * mouseSense;
+    else if (mouseXDist < 0)
+        rotSpeed *= mouseXDist * -mouseSense;
     double oldDirX = dirX;
     double oldPlaneX = planeX;
 
@@ -1298,7 +1298,7 @@ void generateShadowMask(SDL_Texture* tex, int texWidth, int texHeight)
     Uint8 tempBright = 0; //variable to offset torchbrightness by sin lookup table for each column, giving a nice curved radius to the torch fade
     for(int y = 0; y < texHeight; y++)
     {
-        if(y < (texHeight / 2) + vertLook)
+        if(y < (texHeight / 2) + (int)vertLook)
         {
             brightness = std::min(255.0,255.0*std::max((double)minBrightness/255.0,torchBrightness/(ceilDist[texHeight-y])));
             for(int x = 0; x < texWidth; x++)
