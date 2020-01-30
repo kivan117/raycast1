@@ -20,7 +20,7 @@ int mapWidth = 24;
 int mapHeight = 24;
 const int gscreenWidth =  960;//1920;//1280; //640; //720; //800; //960;
 const int gscreenHeight = 540;//1080;//720; //360; //405; //450; //540;
-int minBrightness = 0x01;
+double minBrightness = 0.04;
 double torchBrightness = 1; // 0 - 1; multipler affecting torch light radius around player
 
 bool vertSyncOn = true;
@@ -47,8 +47,8 @@ double moveSpeed = 0;
 double viewTrip = 0.0;
 double blockAheadDist = 500;
 int blockAheadX = 0, blockAheadY = 0;
-double mouseSense = 0.5;
-double mouseVertSense = 2.0;
+double mouseSense = 0.25;
+double mouseVertSense = 0.75;
 Uint64 oldtime = 0;
 Uint64 gtime = 0;
 unsigned int framecounter = 0;
@@ -409,28 +409,41 @@ bool handleInput()
                             }
                             break;
                         }
-                        case SDLK_DELETE:
+                        case SDLK_MINUS:
                         {
                             if (mouseSense > 0.05)
                                 mouseSense -= 0.05;
                             break;
                         }
-                        case SDLK_INSERT:
+                        case SDLK_EQUALS:
                         {
                             mouseSense += 0.05;
                             if (mouseSense >= 5)
                                 mouseSense = 5;
                             break;
                         }
+                        case SDLK_LEFTBRACKET:
+                        {
+                            if (mouseVertSense > 0.05)
+                                mouseVertSense -= 0.05;
+                            break;
+                        }
+                        case SDLK_RIGHTBRACKET:
+                        {
+                            mouseVertSense += 0.05;
+                            if (mouseVertSense >= 5)
+                                mouseVertSense = 5;
+                            break;
+                        }
                         case SDLK_HOME:
                         {
-                            minBrightness = std::min(255, minBrightness+10);
+                            minBrightness = std::min(1.0, minBrightness+0.04);
                             generateShadowMask(gshadowTex, gscreenWidth, gscreenHeight);
                             break;
                         }
                         case SDLK_END:
                         {
-                            minBrightness = std::max(1, minBrightness-10);
+                            minBrightness = std::max(0.04, minBrightness-0.04);
                             generateShadowMask(gshadowTex, gscreenWidth, gscreenHeight);
                             break;
                         }
@@ -545,13 +558,22 @@ bool handleInput()
     {
         framecounter = 0;
         ssFPS << "Raycast Test. FPS: " << std::fixed << std::setprecision(2) << std::setfill('0') << std::setw(6) << (double)SDL_GetPerformanceFrequency() / moveSpeed
-              << " | Vsync: " << vertSyncOn
-              << " | Height: "   << vertHeight;
+              << " | Vsync: "          << vertSyncOn
+              << " | hFOV: "           << std::fixed << std::setprecision(1) << std::setfill('0') << std::setw(3) << hFOV
+              << " | Height: "         << std::fixed << std::setprecision(2) << std::setfill('0') << std::setw(4) << (gscreenHeight / 2 + vertHeight)/gscreenHeight;
         SDL_SetWindowTitle(gwindow, ssFPS.str().c_str());
         ssFPS.str(std::string()); //blank the stream
     }
     if(moveSpeed == 0)
         moveSpeed = 1;
+    moveSpeed = moveSpeed /(double)SDL_GetPerformanceFrequency() * 4; //effectively convert to seconds by /1000, then mult by 4. value is grid squares / sec
+    double rotSpeed = moveSpeed/2; //the value is in radians/second
+    if (mouseXDist > 0)
+        rotSpeed *= mouseXDist * mouseSense;
+    else if (mouseXDist < 0)
+        rotSpeed *= mouseXDist * -mouseSense;
+    double oldDirX = dirX;
+    double oldPlaneX = planeX;
     if (mouseYDist > 0 && vertLook > ( (-1.0)*gscreenHeight / 2)) // look down
     {
         vertLook -= mouseYDist*mouseVertSense;
@@ -589,15 +611,6 @@ bool handleInput()
         if(ceilingOn && !debugColors)
             generateShadowMask(gshadowTex, gscreenWidth, gscreenHeight);
     }
-    moveSpeed = moveSpeed /(double)SDL_GetPerformanceFrequency() * 4; //effectively convert to seconds by /1000, then mult by 4. value is grid squares / sec
-    double rotSpeed = moveSpeed/2; //the value is in radians/second
-    if (mouseXDist > 0)
-        rotSpeed *= mouseXDist * mouseSense;
-    else if (mouseXDist < 0)
-        rotSpeed *= mouseXDist * -mouseSense;
-    double oldDirX = dirX;
-    double oldPlaneX = planeX;
-
     //when running forward or backward while strafing, your total displacement is effectively multplied by sqrt(2)
     //so we're just dividing speed by sqrt(2) in this situation to limit total displacement to normal values
     if (((currentKeyStates[SDL_SCANCODE_W] || currentKeyStates[SDL_SCANCODE_UP]) ^ (currentKeyStates[SDL_SCANCODE_S] || currentKeyStates[SDL_SCANCODE_DOWN]))
@@ -925,7 +938,7 @@ void drawWorldGeoTex(double* wallDist, int* side, int* mapX, int* mapY)  /* TODO
 
         if(ceilingOn) //if we're drawing the ceiling, use ambiant light and torch brightness to set wall brightness
         {
-            brightness = (int)std::max(std::min(255.0, lineHeight * torchBrightness * brightSin[x]), (double)minBrightness);
+            brightness = (int)std::max(std::min(255.0, lineHeight * torchBrightness * brightSin[x]), minBrightness * 255);
         }
         else //if no ceiling, use north-south vs east-west wall to set wall brightness
         {
@@ -1046,31 +1059,39 @@ void drawFloor(double* wallDist, int* side, int* mapX, int* mapY)
         // alters the pixel width of the floor that's used to show depth
         // distPlayer values other than 0.0 will warp the floor/ceiling curvature. (+) values will curve "up" towards the player, and (-) values dropping downward
 
-        if (drawEnd > gscreenHeight || drawEnd < 0)
-            drawEnd = gscreenHeight; //becomes < 0 when the integer overflows
+        if (drawEnd > gscreenHeight || drawEnd < 0) //becomes < 0 when the integer overflows
+            drawEnd = gscreenHeight; 
 
         //draw the floor from drawEnd to the bottom of the screen
+        
+        //clear buffer texture above the floor each frame
         for (int y = 0; y < drawEnd; y++)
         {
             bufferPixels[y * gscreenWidth + x] = 0;
         }
+
+        //get attributes of the floor source texture
         SDL_QueryTexture(gfloorTex, NULL, NULL, &gtexWidth, &gtexHeight);
+
+        //draw floor in vertical stripe from bottom of wall to bottom of screen
         for (int y = drawEnd; y < gscreenHeight; y++)
         {
-
+            //calculate pixel based on perspective
             weight = (floorDist[y] - distPlayer) / (wallDist[x] - distPlayer);
             currentFloorX = weight * floorXWall + (1.0 - weight) * posX;
             currentFloorY = weight * floorYWall + (1.0 - weight) * posY;
+
+            //select that pixel from the source texture
             floorTexX = int(currentFloorX * gtexWidth) % gtexWidth;
             floorTexY = int(currentFloorY * gtexHeight) % gtexHeight;
 
-            //shitty slow version. need to find a way to go faster than streaming textures and a buffer texture
+            //set destination pixel to the selected pixel from the source
             bufferPixels[y * gscreenWidth + x] = ufloorTexPix[gtexWidth * floorTexY + floorTexX];
         }
         
         if(ceilingOn)
         {
-            drawEnd = (lineHeight / 2) + (gscreenHeight / 2) + (vertHeight / wallDist[x]) + vertLook;
+            drawEnd = (int)(((double)lineHeight / 2) + ((double)gscreenHeight / 2) + (vertHeight / wallDist[x]) + vertLook);
             SDL_QueryTexture(gceilTex, NULL, NULL, &gtexWidth, &gtexHeight);
             for (int y = gscreenHeight - drawEnd + lineHeight; y < gscreenHeight; y++)
             {
@@ -1291,7 +1312,7 @@ void generateShadowMask(SDL_Texture* tex, int texWidth, int texHeight)
     int pitch;
     SDL_LockTexture(tex, NULL, &texPix, &pitch);
     Uint32* pixels = (Uint32*)texPix;
-    double brightness;
+    double brightness = 0;
     Uint32 format;
     SDL_QueryTexture(tex, &format, NULL, NULL, NULL);
     SDL_PixelFormat *mappingFormat = SDL_AllocFormat(format);
@@ -1300,22 +1321,21 @@ void generateShadowMask(SDL_Texture* tex, int texWidth, int texHeight)
     {
         if(y < (texHeight / 2) + (int)vertLook)
         {
-            brightness = std::min(255.0,255.0*std::max((double)minBrightness/255.0,torchBrightness/(ceilDist[texHeight-y])));
+            brightness = std::min(1.0,std::max(minBrightness,torchBrightness/(ceilDist[texHeight-y])));
             for(int x = 0; x < texWidth; x++)
             {
-                tempBright = (Uint8)std::min(255.0,std::max((double)minBrightness, brightness * brightSin[x]));
+                
+                tempBright = (Uint8)255.0*std::min(1.0,std::max(minBrightness, brightness * brightSin[x]));
                 pixels[y * texWidth + x] = SDL_MapRGBA(mappingFormat, tempBright, tempBright, tempBright, 0xff);
-                //pixels[(texHeight - y - 1) * texWidth + x] = SDL_MapRGBA(mappingFormat, tempBright, tempBright, tempBright, 0xff);
             }
         }
         else
         {
-            brightness = std::min(255.0,255.0*std::max((double)minBrightness/255.0,torchBrightness/(floorDist[y])));
+            brightness = std::min(1.0,std::max(minBrightness,torchBrightness/(floorDist[y])));
             for(int x = 0; x < texWidth; x++)
             {
-                tempBright = (Uint8)std::min(255.0,std::max((double)minBrightness, brightness * brightSin[x]));
-                //pixels[y * texWidth + x] = SDL_MapRGBA(mappingFormat, tempBright, tempBright, tempBright, 0xff);
-                pixels[(y) * texWidth + x] = SDL_MapRGBA(mappingFormat, tempBright, tempBright, tempBright, 0xff);
+                tempBright = (Uint8)255.0*std::min(1.0,std::max(minBrightness, brightness * brightSin[x]));
+                pixels[y * texWidth + x] = SDL_MapRGBA(mappingFormat, tempBright, tempBright, tempBright, 0xff);
             }
         }
         
