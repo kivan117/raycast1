@@ -1,8 +1,7 @@
 Variable height walls
-Floor cast horizontally?
-Improve shadow texture performance
 Add objects with sprites
 Animate doors
 Transparent walls
 Mirrors / Portals
 Config file
+Make fog respect changes in FOV

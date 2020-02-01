@@ -20,9 +20,11 @@ int mapWidth = 24;
 int mapHeight = 24;
 const int gscreenWidth =  960;//1920;//1280; //640; //720; //800; //960;
 const int gscreenHeight = 540;//1080;//720; //360; //405; //450; //540;
-double minBrightness = 0.04;
+double minBrightness = 0.00; // 0 to 1, global minimum brightness for the level
 double torchBrightness = 1; // 0 - 1; multipler affecting torch light radius around player
-
+double fogMultiplier = 1; // used to raise or lower the thickness of the darkness / fog effect
+SDL_Color fogColor = {0,0,0,0};
+bool fogOn = false;
 bool vertSyncOn = true;
 double floorDist[gscreenHeight];
 double ceilDist[gscreenHeight];
@@ -30,21 +32,19 @@ double brightSin[gscreenWidth];
 
 const double radToDeg = 180 / M_PI;
 const double degToRad = M_PI / 180;
-
-const double vFOV = 60.0; //this is just an unused assumed number at the moment
-double hFOV = 90.0;
+double hFOV = 90.0;  //horizontal field of view in degrees
 double vertLook = 0;  // number of pixels to look up/down
 double vertHeight = 0;
 
 bool sprinting = false;
 
-double planeX = 0, planeY = std::tan((hFOV * degToRad)/2);
+double planeX = 0, planeY = 1;
 
 double posX = 2, posY = 2;         //x and y start position
-double dirX = 1, dirY = 0;         //initial direction vector straight down
+double dirX = std::tan((hFOV * degToRad)/2), dirY = 0;         //initial direction vector straight down
 
 double moveSpeed = 0;
-double viewTrip = 0.0;
+double viewTrip = 0.0; //fun effect to stretch and curve floor/ceiling. totally useless
 double blockAheadDist = 500;
 int blockAheadX = 0, blockAheadY = 0;
 double mouseSense = 0.25;
@@ -62,10 +62,11 @@ SDL_Texture *gskyTex = NULL;
 SDL_Texture *gfloorTex = NULL;
 SDL_Texture *gceilTex = NULL;
 SDL_Texture *gfloorBuffer = NULL;
-SDL_Texture *gshadowTex = NULL;
+SDL_Texture *gfogTex = NULL;
 SDL_Texture *weaponTex = NULL;
 int gtexWidth = 0;
 int gtexHeight = 0;
+//int fogQuality = 1; //power of 2, world geometry fog only sampled every nth pixels
 SDL_Rect gfloorRect;
 SDL_Rect gskyDestRect;
 SDL_Rect gskySrcRect;
@@ -88,7 +89,7 @@ void calcRaycast();
 //abstracted out the 2 types of possible world geometry drawing... the resulting functions are really ugly and need fixed because it as a quick hack
 void drawWorldGeoFlat(double* wallDist, int* side, int* mapX, int* mapY);
 void drawWorldGeoTex(double* wallDist, int* side, int* mapX, int* mapY);
-void drawFloor(double* wallDist, int* side, int* mapX, int* mapY);
+void drawFloor(double* wallDist, int* drawStart, int* drawEnd, int* side, int* mapX, int* mapY);
 void drawSkyBox();
 void close();
 // loads a BMP image into a texture on the rendering device
@@ -101,7 +102,7 @@ std::string getProjectPath(const std::string &subDir);
 //load BMP, return texture
 SDL_Texture *loadImage(std::string path);
 SDL_Texture *loadImageColorKey(std::string path);
-void generateShadowMask(SDL_Texture* tex, int texWidth, int texHeight);
+void generatefogMask(SDL_Texture* tex, int* drawStart, int* drawEnd, double* wallDist);
 void drawHud(); //just stub functions for now
 void drawWeap();
 void changeFOV(bool rel, double newFOV);
@@ -292,8 +293,8 @@ bool initTextures()
     {
         success = false;
     }
-    gshadowTex = SDL_CreateTexture(gRenderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING, gscreenWidth, gscreenHeight);
-    if(gshadowTex == NULL)
+    gfogTex = SDL_CreateTexture(gRenderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING, gscreenWidth, gscreenHeight);
+    if(gfogTex == NULL)
     {
         success = false;
     }
@@ -301,15 +302,14 @@ bool initTextures()
     {
         for(int y = 0; y < gscreenHeight; y++) //define a height table for floor and ceiling calculations later
         {
-            floorDist[y] = (gscreenHeight) / ((2.0*(y-vertLook) - (gscreenHeight)));
-            ceilDist[y] = (gscreenHeight) / ((2.0*(y+vertLook) - (gscreenHeight)));
+            floorDist[y] = (gscreenHeight+(2*vertHeight)) / ((2.0*(y-vertLook) - (gscreenHeight)));
+            ceilDist[y] = (gscreenHeight-(2*vertHeight)) / ((2.0*(y+vertLook) - (gscreenHeight)));
         }
-        for(int x = 0; x < gscreenWidth; x++) //setup a sin lookup table for the shadow mask for later
+        for(int x = 0; x < gscreenWidth; x++) //setup a sin lookup table for the fog mask for later
         {
-            brightSin[x] = sin((M_PI / 2.0)-(hFOV / 2.0 * degToRad)+(((double)x/(double)gscreenWidth)*(hFOV * degToRad)));
-            brightSin[x] *= brightSin[x]; // squared to get stronger curve effect
+            brightSin[x] = 1/sin((M_PI / 2.0)-(hFOV / 2.0 * degToRad)+(((double)x/(double)gscreenWidth)*(hFOV * degToRad)));
+            //brightSin[x] *= brightSin[x]; // squared to get stronger curve effect
         }
-        generateShadowMask(gshadowTex, gscreenWidth, gscreenHeight);
     }
 
 
@@ -326,9 +326,10 @@ bool update()
 bool handleInput()
 {
     bool quit = false;
-    bool moveFwd = false;
     int mouseXDist = 0, mouseYDist = 0;
+    SDL_GetRelativeMouseState(&mouseXDist,&mouseYDist);
 
+    const Uint8 *currentKeyStates = SDL_GetKeyboardState(NULL);
 
     //Event handler
     SDL_Event e;
@@ -336,8 +337,6 @@ bool handleInput()
     SDL_PumpEvents();
     while (SDL_PollEvent(&e) != 0)
     {
-        
-        
         //User requests to quit by pressing X button
 
         switch (e.type)
@@ -347,31 +346,68 @@ bool handleInput()
                 quit = true;
                 break;
             }
-            // case(SDL_MOUSEMOTION):
-            // {
-            //     if(enableInput)
-            //     {
-            //         mouseXDist = e.motion.xrel;
-            //         mouseYDist = e.motion.yrel;
-            //     }
-            //     break;
-            // }
-            case(SDL_MOUSEWHEEL):  //if scroll mousewheel, change horizontal field of view
+            case(SDL_MOUSEBUTTONDOWN):
             {
                 if (enableInput)
                 {
-                    if (e.wheel.y > 0) // scroll up, increase FOV
+                    if (e.button.button == SDL_BUTTON_RIGHT && e.button.type == SDL_MOUSEBUTTONDOWN)
                     {
-                        changeFOV(true, 1.0);
-
+                        if(blockAheadDist < 1)
+                        {
+                            switch (leveldata[blockAheadX][blockAheadY])
+                            {
+                            case 1:
+                                //standard wall;
+                                break;
+                            case 2:
+                                //exit panel;
+                                newlevel(false);
+                                break;
+                            case 3:
+                                //door;
+                                leveldata[blockAheadX][blockAheadY] = 0;
+                                break;
+                            default:
+                                //likely, an error;
+                                break;
+                            }
+                        }
                     }
-                    else if (e.wheel.y < 0) // scroll down, decrease FOV
-                    {
-                        changeFOV(true, -1.0);
-                    }
-                    if(ceilingOn && !debugColors)
-                        generateShadowMask(gshadowTex, gscreenWidth, gscreenHeight);
                 }
+                break;
+            }
+            case(SDL_MOUSEWHEEL):  //if scroll mousewheel, change some engine attributes
+            {
+                if (e.wheel.y != 0)
+                {
+                    //insert, home, and pageup used to control lighting
+                    if(currentKeyStates[SDL_SCANCODE_INSERT]) //fog multiplier
+                    {
+                        fogMultiplier *= 1 + (0.04 * e.wheel.y);
+                    }
+                    else if(currentKeyStates[SDL_SCANCODE_HOME]) //world minimum brightness
+                    {
+                        minBrightness = std::min(1.0,std::max(0.0,minBrightness + (0.01*e.wheel.y)));
+                    }
+                    else if(currentKeyStates[SDL_SCANCODE_PAGEUP]) //local player lightsource brightness
+                    {
+                        torchBrightness = std::min(1.0,std::max(0.0,torchBrightness + (0.01*e.wheel.y)));
+                    }
+                    //delete, end, pagedown used to control camera
+                    else if(currentKeyStates[SDL_SCANCODE_DELETE]) //horizontal FOV
+                    {
+                        changeFOV(true, e.wheel.y);
+                    }
+                    else if (currentKeyStates[SDL_SCANCODE_END]) //mouse horizontal sensitivity
+                    {
+                        mouseSense = std::min(5.0,std::max(0.01,mouseSense+0.01*e.wheel.y));
+                    }
+                    else if (currentKeyStates[SDL_SCANCODE_PAGEDOWN]) //mouse vertical sensitivity
+                    {
+                        mouseVertSense = std::min(5.0,std::max(0.01,mouseVertSense+0.01*e.wheel.y));
+                    }
+                    
+                }                
 
                 break;
             }
@@ -385,78 +421,27 @@ bool handleInput()
                         {
                             if (enableInput)
                             {
-                                //printf("Dist: %f, X: %d, Y: %d\n", blockAheadDist, blockAheadX, blockAheadY);
-                                if (blockAheadDist < 1)
+                                if(blockAheadDist < 1)
                                 {
                                     switch (leveldata[blockAheadX][blockAheadY])
                                     {
                                     case 1:
-                                        //printf("Solid brick, won't budge.\n");
+                                        //standard wall;
                                         break;
                                     case 2:
-                                        //printf("The exit.\n");
+                                        //exit panel;
                                         newlevel(false);
                                         break;
                                     case 3:
-                                        //printf("Opened Door\n");
+                                        //door;
                                         leveldata[blockAheadX][blockAheadY] = 0;
                                         break;
                                     default:
-                                        //printf("Huh?\n");
+                                        //likely, an error;
                                         break;
                                     }
                                 }
                             }
-                            break;
-                        }
-                        case SDLK_MINUS:
-                        {
-                            if (mouseSense > 0.05)
-                                mouseSense -= 0.05;
-                            break;
-                        }
-                        case SDLK_EQUALS:
-                        {
-                            mouseSense += 0.05;
-                            if (mouseSense >= 5)
-                                mouseSense = 5;
-                            break;
-                        }
-                        case SDLK_LEFTBRACKET:
-                        {
-                            if (mouseVertSense > 0.05)
-                                mouseVertSense -= 0.05;
-                            break;
-                        }
-                        case SDLK_RIGHTBRACKET:
-                        {
-                            mouseVertSense += 0.05;
-                            if (mouseVertSense >= 5)
-                                mouseVertSense = 5;
-                            break;
-                        }
-                        case SDLK_HOME:
-                        {
-                            minBrightness = std::min(1.0, minBrightness+0.04);
-                            generateShadowMask(gshadowTex, gscreenWidth, gscreenHeight);
-                            break;
-                        }
-                        case SDLK_END:
-                        {
-                            minBrightness = std::max(0.04, minBrightness-0.04);
-                            generateShadowMask(gshadowTex, gscreenWidth, gscreenHeight);
-                            break;
-                        }
-                        case SDLK_PAGEUP:
-                        {
-                            torchBrightness = std::min(1.0, torchBrightness+0.04);
-                            generateShadowMask(gshadowTex, gscreenWidth, gscreenHeight);
-                            break;
-                        }
-                        case SDLK_PAGEDOWN:
-                        {
-                            torchBrightness = std::max(0.04, torchBrightness-0.04);
-                            generateShadowMask(gshadowTex, gscreenWidth, gscreenHeight);
                             break;
                         }
                         case SDLK_F7:
@@ -485,17 +470,20 @@ bool handleInput()
                         }
                         case SDLK_F9:
                         {
-                            ceilingOn = !(ceilingOn);
-                            if(ceilingOn && !debugColors)
-                                generateShadowMask(gshadowTex, gscreenWidth, gscreenHeight);
+                            fogOn = !(fogOn);
                             break;
                         }
                         case SDLK_F10:
                         {
-                            debugColors = !(debugColors);
+                            ceilingOn = !(ceilingOn);
                             break;
                         }
                         case SDLK_F11:
+                        {
+                            debugColors = !(debugColors);
+                            break;
+                        }
+                        case SDLK_F12:
                         {
                             if (SDL_GetWindowFlags(gwindow) & SDL_WINDOW_FULLSCREEN)
                             {
@@ -518,17 +506,6 @@ bool handleInput()
                 }
                 break;
             }
-            /*case(SDL_KEYUP):
-            {
-                switch (e.key.keysym.sym)
-                {
-                    default:
-                    {
-                        break;
-                    }
-                }
-                break;
-            }*/
             case(SDL_WINDOWEVENT):
             {
                 if (e.window.event == SDL_WINDOWEVENT_RESIZED || e.window.event == SDL_WINDOWEVENT_SIZE_CHANGED)
@@ -547,10 +524,6 @@ bool handleInput()
                 break;
         }
     }
-
-    SDL_GetRelativeMouseState(&mouseXDist,&mouseYDist);
-
-    const Uint8 *currentKeyStates = SDL_GetKeyboardState(NULL);
     gtime = SDL_GetPerformanceCounter();
     moveSpeed = (gtime - oldtime);
     oldtime = gtime;
@@ -589,9 +562,11 @@ bool handleInput()
         gskySrcRect.y = (int)std::round(((double)th/2.0 - (double)gskySrcRect.h/2.0) - ((double)vertLook * ((double)gskySrcRect.h/(double)gskyDestRect.h)));
         if(gskySrcRect.y > th - gskySrcRect.h)
              gskySrcRect.y = th - gskySrcRect.h;
-
-        if(ceilingOn && !debugColors)
-            generateShadowMask(gshadowTex, gscreenWidth, gscreenHeight);
+        if(debugColors)
+        {
+            gfloorRect.y = gscreenHeight / 2 + vertLook;
+            gfloorRect.h = gscreenHeight - gfloorRect.y;
+        }
     }
     else if (mouseYDist < 0 && vertLook < (gscreenHeight / 2)) //look up
     {
@@ -608,8 +583,11 @@ bool handleInput()
         gskySrcRect.y = (int)std::round(((double)th/2.0 - (double)gskySrcRect.h/2.0) - ((double)vertLook * ((double)gskySrcRect.h/(double)gskyDestRect.h)));
         if (gskySrcRect.y < 0)
             gskySrcRect.y = 0;
-        if(ceilingOn && !debugColors)
-            generateShadowMask(gshadowTex, gscreenWidth, gscreenHeight);
+        if(debugColors)
+        {
+            gfloorRect.y = gscreenHeight / 2 + vertLook;
+            gfloorRect.h = gscreenHeight - gfloorRect.y;
+        }
     }
     //when running forward or backward while strafing, your total displacement is effectively multplied by sqrt(2)
     //so we're just dividing speed by sqrt(2) in this situation to limit total displacement to normal values
@@ -623,49 +601,50 @@ bool handleInput()
     {     
         moveSpeed *= 1.5;
     }    
-
     //Act on keypresses
     if (currentKeyStates[SDL_SCANCODE_ESCAPE]) //Pressed escape, close window
         quit = true;
+    double xComponent = (dirX / (std::abs(dirX)+std::abs(dirY)));
+    double yComponent = (dirY / (std::abs(dirX)+std::abs(dirY)));
     if (currentKeyStates[SDL_SCANCODE_W] || currentKeyStates[SDL_SCANCODE_UP]) //move forward
     {
         // the 0.3 is to try to prevent the player from normally being right up on the wall and clipping through it on corners
         // they still CAN, but they have to on purpose essentially
-        if (leveldata[int(posX + dirX * (moveSpeed + 0.3))][int(posY)] == false)
-            if (leveldata[int(posX + dirX * moveSpeed)][int(posY)] == false)
-                posX += dirX * moveSpeed;
-        if (leveldata[int(posX)][int(posY + dirY * (moveSpeed + 0.3))] == false)
-            if (leveldata[int(posX)][int(posY + dirY * moveSpeed)] == false)
-                posY += dirY * moveSpeed;
+        if (leveldata[int(posX + xComponent * (0.3))][int(posY)] == false)
+            if (leveldata[int(posX + xComponent * moveSpeed)][int(posY)] == false)
+                posX += (xComponent) * moveSpeed;
+        if (leveldata[int(posX)][int(posY + yComponent * (0.3))] == false)
+            if (leveldata[int(posX)][int(posY + yComponent * moveSpeed)] == false)
+                posY += yComponent * moveSpeed;
     }
     if (currentKeyStates[SDL_SCANCODE_S] || currentKeyStates[SDL_SCANCODE_DOWN]) //move backward
     {
-        if (leveldata[int(posX - dirX * moveSpeed)][int(posY)] == false)
-            if (leveldata[int(posX - dirX * moveSpeed)][int(posY)] == false)
-                posX -= dirX * moveSpeed;
-        if (leveldata[int(posX)][int(posY - dirY * (moveSpeed + 0.3))] == false)
-            if (leveldata[int(posX)][int(posY - dirY * (moveSpeed + 0.3))] == false)
-                posY -= dirY * moveSpeed;
+        if (leveldata[int(posX - xComponent * (0.3))][int(posY)] == false)
+            if (leveldata[int(posX - xComponent * moveSpeed)][int(posY)] == false)
+                posX -= xComponent * moveSpeed;
+        if (leveldata[int(posX)][int(posY - yComponent * (0.3))] == false)
+            if (leveldata[int(posX)][int(posY - yComponent * moveSpeed)] == false)
+                posY -= yComponent * moveSpeed;
     }
     if (currentKeyStates[SDL_SCANCODE_A] || currentKeyStates[SDL_SCANCODE_LEFT]) //strafe left
     {
         // the 0.3 is to try to prevent the player from normally being right up on the wall and clipping through it on corners
         // they still CAN, but they have to on purpose essentially
-        if (leveldata[int(posX - planeX * (moveSpeed + 0.3))][int(posY)] == false)
+        if (leveldata[int(posX - planeX * (0.3))][int(posY)] == false)
             if (leveldata[int(posX - planeX * moveSpeed)][int(posY)] == false)
                 posX -= planeX * (moveSpeed);
-        if (leveldata[int(posX)][int(posY - planeY * (moveSpeed + 0.3 - (moveFwd * 0.1)))] == false)
-            if (leveldata[int(posX)][int(posY - planeY * moveSpeed - (moveFwd * 0.1))] == false)
+        if (leveldata[int(posX)][int(posY - planeY * (0.3))] == false)
+            if (leveldata[int(posX)][int(posY - planeY * moveSpeed)] == false)
                 posY -= planeY * (moveSpeed);
     }
     if (currentKeyStates[SDL_SCANCODE_D] || currentKeyStates[SDL_SCANCODE_RIGHT]) //strafe right
     {
         // the 0.3 is to try to prevent the player from normally being right up on the wall and clipping through it on corners
         // they still CAN, but they have to on purpose essentially
-        if (leveldata[int(posX + planeX * (moveSpeed + 0.3))][int(posY)] == false)
+        if (leveldata[int(posX + planeX * (0.3))][int(posY)] == false)
             if (leveldata[int(posX + planeX * moveSpeed)][int(posY)] == false)
                 posX += planeX * moveSpeed;
-        if (leveldata[int(posX)][int(posY + planeY * (moveSpeed + 0.3))] == false)
+        if (leveldata[int(posX)][int(posY + planeY * (0.3))] == false)
             if (leveldata[int(posX)][int(posY + planeY * moveSpeed)] == false)
                 posY += planeY * moveSpeed;
     }
@@ -697,8 +676,6 @@ bool handleInput()
             floorDist[y] = (gscreenHeight+(2*vertHeight)) / ((2.0*(y-vertLook) - (gscreenHeight)));
             ceilDist[y] = (gscreenHeight-(2*vertHeight)) / ((2.0*(y+vertLook) - (gscreenHeight)));
         }
-        if(ceilingOn && !debugColors)
-            generateShadowMask(gshadowTex, gscreenWidth, gscreenHeight);
     }
     else if(currentKeyStates[SDL_SCANCODE_X])
     {
@@ -710,9 +687,8 @@ bool handleInput()
             floorDist[y] = (gscreenHeight+(2*vertHeight)) / ((2.0*(y-vertLook) - (gscreenHeight)));
             ceilDist[y] = (gscreenHeight-(2*vertHeight)) / ((2.0*(y+vertLook) - (gscreenHeight)));
         }
-        if(ceilingOn && !debugColors)
-            generateShadowMask(gshadowTex, gscreenWidth, gscreenHeight);
     }
+    
     return quit;
 }
 void updateScreen()
@@ -746,6 +722,7 @@ void calcRaycast()
 
         //calculate ray position and direction
         cameraX = 2 * x / double(gscreenWidth) - 1; //x-coordinate in camera space, or along the x of the camera plane itself
+                                                    //cameraX ranges from -1 to 1, with 0 being center of camera screen
         
         rayDirX = dirX + planeX * cameraX; //the XY coord where the vector of this ray crosses the camera plane
         rayDirY = dirY + planeY * cameraX; //
@@ -826,9 +803,18 @@ void calcRaycast()
         }
 
         wallDist[x] = perpWallDist; //fill wall distance buffer
+
+        //store location and distance of wall straight ahead of player
         if(x == gscreenWidth / 2)
         {
-            blockAheadDist = perpWallDist;
+            if (side[x] == 0)
+            {
+                blockAheadDist = std::abs(perpWallDist * rayDirX);
+            }
+            else
+            {
+                blockAheadDist = std::abs(perpWallDist * rayDirY);
+            }            
             blockAheadX = mapX[x];
             blockAheadY = mapY[x];
         }
@@ -917,16 +903,15 @@ void drawWorldGeoFlat(double* wallDist, int* side, int* mapX, int* mapY)
     }
 }
 
-void drawWorldGeoTex(double* wallDist, int* side, int* mapX, int* mapY)  /* TODO: fix hardcoded magic numbers for skybox to be FOV aware */
+void drawWorldGeoTex(double* wallDist, int* side, int* mapX, int* mapY)
 {
     if(ceilingOn == false)
     {
         drawSkyBox();
     }
-
-    drawFloor(wallDist, side, mapX, mapY);
-    double cameraX, rayDirX, rayDirY, wallX;
-    int lineHeight, brightness, texX, drawStart, drawEnd;
+    double cameraX, rayDirX, rayDirY, wallX, brightness;
+    int lineHeight, texX;
+    int drawStart[gscreenWidth], drawEnd[gscreenWidth];
     
     for (int x = 0; x < gscreenWidth; x++)
     {
@@ -935,18 +920,6 @@ void drawWorldGeoTex(double* wallDist, int* side, int* mapX, int* mapY)  /* TODO
         rayDirY = dirY + planeY * cameraX;
         //Calculate height of line to draw on screen
         lineHeight = (int)(gscreenHeight / wallDist[x]);
-
-        if(ceilingOn) //if we're drawing the ceiling, use ambiant light and torch brightness to set wall brightness
-        {
-            brightness = (int)std::max(std::min(255.0, lineHeight * torchBrightness * brightSin[x]), minBrightness * 255);
-        }
-        else //if no ceiling, use north-south vs east-west wall to set wall brightness
-        {
-            if(side[x] == 0)
-                brightness = 0xff;
-            else
-                brightness = 0x80;
-        }
         //choose a texture
         switch (leveldata[mapX[x]][mapY[x]])
         {
@@ -979,29 +952,33 @@ void drawWorldGeoTex(double* wallDist, int* side, int* mapX, int* mapY)  /* TODO
             texX = gtexWidth - texX - 1;
 
         //calculate lowest and highest pixel to fill in current stripe
-        drawStart = -lineHeight / 2 + (gscreenHeight / 2) + (vertHeight / wallDist[x]) + vertLook;
-        drawEnd = lineHeight / 2 + (gscreenHeight / 2) + (vertHeight / wallDist[x]) + vertLook;
+        drawStart[x] = -lineHeight / 2 + (gscreenHeight / 2) + (vertHeight / wallDist[x]) + vertLook;
+        drawEnd[x] = lineHeight / 2 + (gscreenHeight / 2) + (vertHeight / wallDist[x]) + vertLook;
 
         // set up the rectangle to sample the texture for the wall
-        SDL_Rect line = {x, drawStart, 1, drawEnd - drawStart};
+        SDL_Rect line = {x, drawStart[x], 1, drawEnd[x] - drawStart[x]};
         SDL_Rect sample = {texX, 0, 1, gtexHeight};
 
         //use color mod to darken the wall texture
         //255 = no color mod, lower values mean darker
-        //currently based on distance from player, but you can do x/y side of walls or whatever
-        SDL_SetTextureColorMod(gcurrTex, brightness, brightness, brightness);
-        //draw wall stripe
-        renderTexture(gcurrTex, gRenderer, line, &sample);
+        //currently setup so that NS walls are full brightness, and EW walls are darkened
+        if(side[x] == 0)
+            brightness = 255.0;
+        else
+            brightness = 127.0;
 
+        SDL_SetTextureColorMod(gcurrTex, brightness, brightness, brightness);
+        renderTexture(gcurrTex, gRenderer, line, &sample);   
     }
+
+    drawFloor(wallDist, drawStart, drawEnd, side, mapX, mapY);
 }
 
-void drawFloor(double* wallDist, int* side, int* mapX, int* mapY)
+void drawFloor(double* wallDist, int* drawStart, int* drawEnd, int* side, int* mapX, int* mapY)
 {
     //create some pointers to later access the pixels in the floor and buffer textures
     void *floorBufferPixels, *floorTexPixels, *ceilTexPixels;
-    int floorBufferPitch, floorTexPitch, ceilTexPitch, floorTexX, floorTexY, lineHeight, drawEnd;
-    //Uint32 currentColor;
+    int floorBufferPitch, floorTexPitch, ceilTexPitch, floorTexX, floorTexY, lineHeight;
 
     //lock floor textures and a screen buffer texture for read/write operations
 
@@ -1019,10 +996,6 @@ void drawFloor(double* wallDist, int* side, int* mapX, int* mapY)
 
     for (int x = 0; x < gscreenWidth; x++)
     {
-        //Calculate height of line to draw on screen
-        lineHeight = (int)(gscreenHeight / wallDist[x]);
-        //calculate lowest and highest pixel to fill in current stripe
-        drawEnd = (lineHeight / 2) + (gscreenHeight / 2) + (vertHeight / wallDist[x]) + vertLook;
         cameraX = 2 * x / double(gscreenWidth) - 1; //x-coordinate in camera space, or along the x of the camera plane itself
         rayDirX = dirX + planeX * cameraX; //the XY coord where the vector of this ray crosses the camera plane
         rayDirY = dirY + planeY * cameraX;
@@ -1059,13 +1032,14 @@ void drawFloor(double* wallDist, int* side, int* mapX, int* mapY)
         // alters the pixel width of the floor that's used to show depth
         // distPlayer values other than 0.0 will warp the floor/ceiling curvature. (+) values will curve "up" towards the player, and (-) values dropping downward
 
-        if (drawEnd > gscreenHeight || drawEnd < 0) //becomes < 0 when the integer overflows
-            drawEnd = gscreenHeight; 
+        if (drawEnd[x] > gscreenHeight || drawEnd[x] < 0) //becomes < 0 when the integer overflows
+            drawEnd[x] = gscreenHeight; 
 
         //draw the floor from drawEnd to the bottom of the screen
         
         //clear buffer texture above the floor each frame
-        for (int y = 0; y < drawEnd; y++)
+        //perhaps doing this all at once with a fill rect draw would be faster?
+        for (int y = 0; y < drawEnd[x]; y++)
         {
             bufferPixels[y * gscreenWidth + x] = 0;
         }
@@ -1074,7 +1048,7 @@ void drawFloor(double* wallDist, int* side, int* mapX, int* mapY)
         SDL_QueryTexture(gfloorTex, NULL, NULL, &gtexWidth, &gtexHeight);
 
         //draw floor in vertical stripe from bottom of wall to bottom of screen
-        for (int y = drawEnd; y < gscreenHeight; y++)
+        for (int y = drawEnd[x]; y < gscreenHeight; y++)
         {
             //calculate pixel based on perspective
             weight = (floorDist[y] - distPlayer) / (wallDist[x] - distPlayer);
@@ -1091,9 +1065,8 @@ void drawFloor(double* wallDist, int* side, int* mapX, int* mapY)
         
         if(ceilingOn)
         {
-            drawEnd = (int)(((double)lineHeight / 2) + ((double)gscreenHeight / 2) + (vertHeight / wallDist[x]) + vertLook);
             SDL_QueryTexture(gceilTex, NULL, NULL, &gtexWidth, &gtexHeight);
-            for (int y = gscreenHeight - drawEnd + lineHeight; y < gscreenHeight; y++)
+            for (int y = gscreenHeight - drawStart[x]; y < gscreenHeight; y++)
             {
                 
                 weight = (ceilDist[y] - distPlayer) / (wallDist[x] - distPlayer);
@@ -1112,14 +1085,18 @@ void drawFloor(double* wallDist, int* side, int* mapX, int* mapY)
     SDL_UnlockTexture(gfloorTex);
     SDL_UnlockTexture(gceilTex);
     SDL_UnlockTexture(gfloorBuffer);
-     //SDL_FreeFormat(mappingFormat);
     SDL_SetTextureBlendMode(gfloorBuffer, SDL_BLENDMODE_BLEND);
     SDL_RenderCopy(gRenderer, gfloorBuffer, NULL, NULL);    
-    //render distance shadow on top of floor/ceiling textures
-    if(ceilingOn)
+    //render distance fog on top of floor/ceiling textures
+    //
+    //THIS IS SLOOOOWWWWW
+    //
+    //TODO: speed up fog map
+    if(fogOn)
     {
-        SDL_SetTextureBlendMode(gshadowTex, SDL_BLENDMODE_MOD);
-        SDL_RenderCopy(gRenderer, gshadowTex, NULL, NULL);
+        generatefogMask(gfogTex, drawStart, drawEnd, wallDist);
+        SDL_SetTextureBlendMode(gfogTex, SDL_BLENDMODE_BLEND);
+        SDL_RenderCopy(gRenderer, gfogTex, NULL, NULL);
     }
 
 
@@ -1128,46 +1105,41 @@ void drawFloor(double* wallDist, int* side, int* mapX, int* mapY)
 void drawSkyBox()
 {
     //Here I'm creating a sky box and rotating it according to player's viewing angle
-        //trying to match drawn sky segment to FOV
-        //skybox is 900 pix wide, FOV is ~75 degrees, so we can see ~188 pixels at a time
+    //trying to match drawn sky segment to FOV
+    
+    double angle = atan2(dirY, dirX) * radToDeg; // gets view dir in degrees
 
-        //all of these hard coded values are dependent on the sky texture resolution, but not the game resolution
-        //altering the game FOV will make the values wrong though
-        //need to make it calculated based on FOV and sky texture dimensions
-        
-        double angle = atan2(dirY, dirX) * radToDeg; // gets view dir in degrees
+    if (angle < 0)
+        angle += 360;
+    
+    int tw, th;
+    SDL_QueryTexture(gskyTex, NULL, NULL, &tw, &th); //get texture width and height
+    angle *= (double)tw/360.0; //converts 360 degress to texture width
 
+    angle = round(angle); //no fractional pixels allowed
+        if (angle > tw)
+            angle -= tw;
         if (angle < 0)
-            angle += 360;
-        
-        int tw, th;
-        SDL_QueryTexture(gskyTex, NULL, NULL, &tw, &th); //get texture width and height
-        angle *= (double)tw/360.0; //converts 360 degress to texture width
+            angle += tw;
+    gskySrcRect.x = angle;
+    if(tw - gskySrcRect.x < gskySrcRect.w) //reached end of texture and need to draw sky in two parts
+    {
+        //draw first part, wrap to 0, draw rest
+        SDL_Rect tempSrc = gskySrcRect;
+        SDL_Rect tempDest = gskyDestRect;
+        tempSrc.w = tw - tempSrc.x;
+        tempDest.w = (int)((double)tempSrc.w * ((double)gskyDestRect.w / (double)gskySrcRect.w));
+        SDL_RenderCopy(gRenderer, gskyTex, &tempSrc, &tempDest);
 
-        angle = round(angle); //no fractional pixels allowed
-         if (angle > tw)
-             angle -= tw;
-         if (angle < 0)
-             angle += tw;
-        gskySrcRect.x = angle;
-        if(tw - gskySrcRect.x < gskySrcRect.w) //reached end of texture and need to draw sky in two parts
-        {
-            //draw first part, wrap to 0, draw rest
-            SDL_Rect tempSrc = gskySrcRect;
-            SDL_Rect tempDest = gskyDestRect;
-            tempSrc.w = tw - tempSrc.x;
-            tempDest.w = (int)((double)tempSrc.w * ((double)gskyDestRect.w / (double)gskySrcRect.w));
-            SDL_RenderCopy(gRenderer, gskyTex, &tempSrc, &tempDest);
+        tempSrc.x = 0;
+        tempSrc.w = gskySrcRect.w - tempSrc.w;
+        tempDest.x += tempDest.w;
+        tempDest.w = gskyDestRect.w - tempDest.w;
+        SDL_RenderCopy(gRenderer, gskyTex, &tempSrc, &tempDest);
 
-            tempSrc.x = 0;
-            tempSrc.w = gskySrcRect.w - tempSrc.w;
-            tempDest.x += tempDest.w;
-            tempDest.w = gskyDestRect.w - tempDest.w;
-            SDL_RenderCopy(gRenderer, gskyTex, &tempSrc, &tempDest);
-
-        }
-        else //safe to draw entire sky rect at once
-            SDL_RenderCopy(gRenderer, gskyTex, &gskySrcRect, &gskyDestRect); //now paste our chunk of sky onto the renderer
+    }
+    else //safe to draw entire sky rect at once
+        SDL_RenderCopy(gRenderer, gskyTex, &gskySrcRect, &gskyDestRect); //now paste our chunk of sky onto the renderer
 }
 
 void close()
@@ -1293,7 +1265,7 @@ SDL_Texture *loadImageColorKey(std::string path)
     {
         bmp = SDL_ConvertSurfaceFormat(bmp, SDL_PIXELFORMAT_RGBA32, 0);
         SDL_SetColorKey(bmp, SDL_TRUE, SDL_MapRGB(bmp->format, 0xff, 0x00, 0xff));
-        tex = SDL_CreateTextureFromSurface(gRenderer,bmp);// (gRenderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING, bmp->w, bmp->h);
+        tex = SDL_CreateTextureFromSurface(gRenderer,bmp);
 
         SDL_FreeSurface(bmp);
         if (tex == nullptr)
@@ -1305,40 +1277,46 @@ SDL_Texture *loadImageColorKey(std::string path)
     return tex;
 }
 
-void generateShadowMask(SDL_Texture* tex, int texWidth, int texHeight)
+void generatefogMask(SDL_Texture* tex, int* drawStart, int* drawEnd, double* wallDist)
 {
-
+    int texWidth;
+    int texHeight;
     void* texPix = NULL;
-    int pitch;
+    int pitch, lineHeight;
     SDL_LockTexture(tex, NULL, &texPix, &pitch);
     Uint32* pixels = (Uint32*)texPix;
     double brightness = 0;
     Uint32 format;
-    SDL_QueryTexture(tex, &format, NULL, NULL, NULL);
+    SDL_QueryTexture(tex, &format, NULL, &texWidth, &texHeight);
     SDL_PixelFormat *mappingFormat = SDL_AllocFormat(format);
-    Uint8 tempBright = 0; //variable to offset torchbrightness by sin lookup table for each column, giving a nice curved radius to the torch fade
     for(int y = 0; y < texHeight; y++)
     {
-        if(y < (texHeight / 2) + (int)vertLook)
+
+        for(int x = 0; x < texWidth; x++)
         {
-            brightness = std::min(1.0,std::max(minBrightness,torchBrightness/(ceilDist[texHeight-y])));
-            for(int x = 0; x < texWidth; x++)
+            if(y < drawStart[x])
             {
-                
-                tempBright = (Uint8)255.0*std::min(1.0,std::max(minBrightness, brightness * brightSin[x]));
-                pixels[y * texWidth + x] = SDL_MapRGBA(mappingFormat, tempBright, tempBright, tempBright, 0xff);
+                brightness = std::min(1.0,std::max(minBrightness,std::min(torchBrightness,torchBrightness/((fogMultiplier*  brightSin[x]) * ceilDist[texHeight-y] * ceilDist[texHeight-y]))));
+                fogColor.a = (Uint8)255.0*(1.0-std::min(1.0,std::max(minBrightness, brightness)));
+                pixels[y * texWidth + x] = SDL_MapRGBA(mappingFormat, fogColor.r, fogColor.g, fogColor.b, fogColor.a);
             }
-        }
-        else
-        {
-            brightness = std::min(1.0,std::max(minBrightness,torchBrightness/(floorDist[y])));
-            for(int x = 0; x < texWidth; x++)
+            else if(y >= drawEnd[x])
             {
-                tempBright = (Uint8)255.0*std::min(1.0,std::max(minBrightness, brightness * brightSin[x]));
-                pixels[y * texWidth + x] = SDL_MapRGBA(mappingFormat, tempBright, tempBright, tempBright, 0xff);
+                brightness = std::min(1.0,std::max(minBrightness,std::min(torchBrightness,torchBrightness/((fogMultiplier* brightSin[x]) * floorDist[y] * floorDist[y]))));
+                fogColor.a = (Uint8)255.0*(1.0-std::min(1.0,std::max(minBrightness, brightness)));
+                pixels[y * texWidth + x] = SDL_MapRGBA(mappingFormat, fogColor.r, fogColor.g, fogColor.b, fogColor.a);
             }
+            else
+            {
+                lineHeight = drawEnd[x] - drawStart[x];
+                brightness = std::max(std::min(1.0, (double)lineHeight * torchBrightness * brightSin[x] / (fogMultiplier*wallDist[x]*256.0)), minBrightness);      
+                brightness = std::max(std::min((double)brightness, torchBrightness),minBrightness);
+
+                fogColor.a = (Uint8)255.0*(1.0-std::min(1.0,std::max(minBrightness, brightness)));
+                pixels[y * texWidth + x] = SDL_MapRGBA(mappingFormat, fogColor.r, fogColor.g, fogColor.b, fogColor.a);
+            }
+            
         }
-        
     }
     SDL_FreeFormat(mappingFormat);
     SDL_UnlockTexture(tex);
@@ -1381,10 +1359,10 @@ void newlevel(bool warpView)
         loadLevel(levelFileName.str());
 
         //reset all the camera stuff
-        dirX = 1;
+        dirX = std::tan((hFOV*degToRad)/2);
         dirY = 0;        
         planeX = 0;
-        planeY = std::tan((hFOV*degToRad)/2);
+        planeY = 1;
         vertLook = 0;
         vertHeight = 0;
         viewTrip = 0;
@@ -1393,7 +1371,7 @@ void newlevel(bool warpView)
 
 void loadLevel(std::string path)
 {
-    // static std::string projectPath = getProjectPath();
+    
 
     std::ifstream mapFile(path);
     int a;
@@ -1417,7 +1395,7 @@ void loadLevel(std::string path)
         for (int x = 0; x < mapWidth; x++)
         {
             mapFile >> a;
-            leveldata.at(x).at(y) = a; //hope this works?
+            leveldata.at(x).at(y) = a;
         }
     }
 
@@ -1428,17 +1406,18 @@ void changeFOV(bool rel, double newFOV)
 {
     if(rel)
     {
-        double mult = (hFOV + newFOV)/hFOV;
+        if((hFOV + newFOV > 180) || (hFOV + newFOV < 50))
+            return;
+        double mult = std::tan((hFOV * degToRad)/2) / std::tan(((hFOV+newFOV) * degToRad)/2);
         hFOV += newFOV;
-        planeY *= mult;
-        planeX *= mult;
+        dirX *= mult;
+        dirY *= mult;
     }
     else
     {
-        double mult = newFOV/hFOV;
+        double mult = hFOV/newFOV;
         hFOV = newFOV;
-        planeY *= mult;
-        planeX *= mult;
+        dirX *= mult;
+        dirY *= mult;
     }
-    
 }
