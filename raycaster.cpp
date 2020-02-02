@@ -7,6 +7,7 @@
 #include <fstream>
 #include <iomanip>
 #include <vector>
+#include "blocktypes.h"
 
 #ifdef _WIN32
     const char PATH_SYM = '\\';
@@ -75,7 +76,7 @@ SDL_Window *gwindow = NULL;
 //The window renderer
 SDL_Renderer *gRenderer = NULL;
 SDL_Texture *gcurrTex = NULL; //the texture we're actually currently copying during render
-SDL_Texture *gDoorTex = NULL; //test, wall, and sky textures hold texture data long term for examining later as needed
+//SDL_Texture *gDoorTex = NULL;
 SDL_Texture **gwallTex = NULL;
 SDL_Texture *gskyTex = NULL;
 SDL_Texture *gfloorTex = NULL;
@@ -85,6 +86,7 @@ SDL_Texture *gfogTex = NULL;
 SDL_Texture *weaponTex = NULL;
 int gtexWidth = 0;
 int gtexHeight = 0;
+const int totalWallTextures = 3;
 //int fogQuality = 1; //power of 2, world geometry fog only sampled every nth pixels
 SDL_Rect gfloorRect;
 SDL_Rect gskyDestRect;
@@ -92,7 +94,9 @@ SDL_Rect gskySrcRect;
 SDL_Rect weaponTexRect = {0,0,0,0};
 SDL_Rect weaponDestRect;
 std::stringstream ssFPS;
-std::vector<std::vector<int>> leveldata;
+
+//std::vector<std::vector<int>> leveldata;
+std::vector<std::vector<Map_Block>> leveldata;
 
 bool init();
 bool initWindow();
@@ -175,6 +179,7 @@ bool init()
     {
         success = false;
     }
+    initBlockTypes();
 
     return success;
 }
@@ -259,32 +264,33 @@ bool initTextures()
     {
         success = false;
     }
-    texFileName.str(std::string());
-    texFileName << "textures" << PATH_SYM << "door0.bmp";
-    gDoorTex = loadImage(texFileName.str());
-    if (gDoorTex == NULL)
+    // texFileName.str(std::string());
+    // texFileName << "textures" << PATH_SYM << "door0.bmp";
+    // gDoorTex = loadImage(texFileName.str());
+    // if (gDoorTex == NULL)
+    // {
+    //     success = false;
+    // }
+    // else
+    // {
+    //     gcurrTex = gDoorTex; // set the default texture
+    //     SDL_QueryTexture(gcurrTex, NULL, NULL, &gtexWidth, &gtexHeight); //reset gcurrTex attributes
+    // }
+    gwallTex = new SDL_Texture *[totalWallTextures];
+    for(int i = 0; i < totalWallTextures; i++)
     {
-        success = false;
+        texFileName.str(std::string());
+        texFileName << "textures" << PATH_SYM << "wall" << i << ".bmp";
+        gwallTex[i] = loadImage(texFileName.str());
+        if (gwallTex[i] == NULL)
+        {
+            success = false;
+        }
     }
-    else
+    if(success)
     {
-        gcurrTex = gDoorTex; // set the default texture
+        gcurrTex = gwallTex[0]; // set the default texture
         SDL_QueryTexture(gcurrTex, NULL, NULL, &gtexWidth, &gtexHeight); //reset gcurrTex attributes
-    }
-    gwallTex = new SDL_Texture *[2];
-    texFileName.str(std::string());
-    texFileName << "textures" << PATH_SYM << "wall1.bmp";
-    gwallTex[0] = loadImage(texFileName.str());
-    texFileName.str(std::string());
-    texFileName << "textures" << PATH_SYM << "wall2.bmp";
-    gwallTex[1] = loadImage(texFileName.str());
-    if (gwallTex[0] == NULL)
-    {
-        success = false;
-    }
-    if (gwallTex[1] == NULL)
-    {
-        success = false;
     }
 
     texFileName.str(std::string());
@@ -331,8 +337,6 @@ bool initTextures()
             //brightSin[x] *= brightSin[x]; // squared to get stronger curve effect
         }
     }
-
-
     return success;
 }
 
@@ -374,7 +378,7 @@ bool handleInput()
                     {
                         if(blockAheadDist < 1)
                         {
-                            switch (leveldata[blockAheadX][blockAheadY])
+                            switch (leveldata[blockAheadX][blockAheadY].block_id)
                             {
                             case 1:
                                 //standard wall;
@@ -385,7 +389,7 @@ bool handleInput()
                                 break;
                             case 3:
                                 //door;
-                                leveldata[blockAheadX][blockAheadY] = 0;
+                                changeBlock(&leveldata[blockAheadX][blockAheadY], 0);
                                 break;
                             default:
                                 //likely, an error;
@@ -455,7 +459,7 @@ bool handleInput()
                             {
                                 if(blockAheadDist < 1)
                                 {
-                                    switch (leveldata[blockAheadX][blockAheadY])
+                                    switch (leveldata[blockAheadX][blockAheadY].block_id)
                                     {
                                     case 1:
                                         //standard wall;
@@ -466,7 +470,7 @@ bool handleInput()
                                         break;
                                     case 3:
                                         //door;
-                                        leveldata[blockAheadX][blockAheadY] = 0;
+                                        changeBlock(&leveldata[blockAheadX][blockAheadY], 0);
                                         break;
                                     default:
                                         //likely, an error;
@@ -647,42 +651,42 @@ bool handleInput()
     {
         // the 0.3 is to try to prevent the player from normally being right up on the wall and clipping through it on corners
         // they still CAN, but they have to on purpose essentially
-        if (leveldata[int(posX + xComponent * (0.3))][int(posY)] == false)
-            if (leveldata[int(posX + xComponent * moveSpeed)][int(posY)] == false)
+        if (leveldata[int(posX + xComponent * (0.3))][int(posY)].solid == false)
+            if (leveldata[int(posX + xComponent * moveSpeed)][int(posY)].solid == false)
                 posX += (xComponent) * moveSpeed;
-        if (leveldata[int(posX)][int(posY + yComponent * (0.3))] == false)
-            if (leveldata[int(posX)][int(posY + yComponent * moveSpeed)] == false)
+        if (leveldata[int(posX)][int(posY + yComponent * (0.3))].solid == false)
+            if (leveldata[int(posX)][int(posY + yComponent * moveSpeed)].solid == false)
                 posY += yComponent * moveSpeed;
     }
     if (currentKeyStates[SDL_SCANCODE_S] || currentKeyStates[SDL_SCANCODE_DOWN]) //move backward
     {
-        if (leveldata[int(posX - xComponent * (0.3))][int(posY)] == false)
-            if (leveldata[int(posX - xComponent * moveSpeed)][int(posY)] == false)
+        if (leveldata[int(posX - xComponent * (0.3))][int(posY)].solid == false)
+            if (leveldata[int(posX - xComponent * moveSpeed)][int(posY)].solid == false)
                 posX -= xComponent * moveSpeed;
-        if (leveldata[int(posX)][int(posY - yComponent * (0.3))] == false)
-            if (leveldata[int(posX)][int(posY - yComponent * moveSpeed)] == false)
+        if (leveldata[int(posX)][int(posY - yComponent * (0.3))].solid == false)
+            if (leveldata[int(posX)][int(posY - yComponent * moveSpeed)].solid == false)
                 posY -= yComponent * moveSpeed;
     }
     if (currentKeyStates[SDL_SCANCODE_A] || currentKeyStates[SDL_SCANCODE_LEFT]) //strafe left
     {
         // the 0.3 is to try to prevent the player from normally being right up on the wall and clipping through it on corners
         // they still CAN, but they have to on purpose essentially
-        if (leveldata[int(posX - planeX * (0.3))][int(posY)] == false)
-            if (leveldata[int(posX - planeX * moveSpeed)][int(posY)] == false)
+        if (leveldata[int(posX - planeX * (0.3))][int(posY)].solid == false)
+            if (leveldata[int(posX - planeX * moveSpeed)][int(posY)].solid == false)
                 posX -= planeX * (moveSpeed);
-        if (leveldata[int(posX)][int(posY - planeY * (0.3))] == false)
-            if (leveldata[int(posX)][int(posY - planeY * moveSpeed)] == false)
+        if (leveldata[int(posX)][int(posY - planeY * (0.3))].solid == false)
+            if (leveldata[int(posX)][int(posY - planeY * moveSpeed)].solid == false)
                 posY -= planeY * (moveSpeed);
     }
     if (currentKeyStates[SDL_SCANCODE_D] || currentKeyStates[SDL_SCANCODE_RIGHT]) //strafe right
     {
         // the 0.3 is to try to prevent the player from normally being right up on the wall and clipping through it on corners
         // they still CAN, but they have to on purpose essentially
-        if (leveldata[int(posX + planeX * (0.3))][int(posY)] == false)
-            if (leveldata[int(posX + planeX * moveSpeed)][int(posY)] == false)
+        if (leveldata[int(posX + planeX * (0.3))][int(posY)].solid == false)
+            if (leveldata[int(posX + planeX * moveSpeed)][int(posY)].solid == false)
                 posX += planeX * moveSpeed;
-        if (leveldata[int(posX)][int(posY + planeY * (0.3))] == false)
-            if (leveldata[int(posX)][int(posY + planeY * moveSpeed)] == false)
+        if (leveldata[int(posX)][int(posY + planeY * (0.3))].solid == false)
+            if (leveldata[int(posX)][int(posY + planeY * moveSpeed)].solid == false)
                 posY += planeY * moveSpeed;
     }
     if ((currentKeyStates[SDL_SCANCODE_Q] || mouseXDist < 0)&&currentKeyStates[SDL_SCANCODE_E]==false) //turn left
@@ -733,11 +737,8 @@ void updateScreen()
     //clear screen with a dark grey
     SDL_SetRenderDrawColor(gRenderer, 0x20, 0x20, 0x20, 0xff);
     SDL_RenderClear(gRenderer);
-
     calcRaycast(); //calculates and draws all raycast related screen updates
-
     drawHud();
-
     //Update screen
     SDL_RenderPresent(gRenderer);
 }
@@ -824,7 +825,7 @@ void calcRaycast()
                 side[x] = 1;
             }
             //Check if ray has hit a wall
-            if (leveldata[mapX[x]][mapY[x]] > 0)
+            if (leveldata[mapX[x]][mapY[x]].visible)
                 hit = 1;
         }
         
@@ -893,7 +894,7 @@ void drawWorldGeoFlat(double* wallDist, int* side, int* mapX, int* mapY)
         //give x and y sides different brightness
         if (side[x] == 0)
         {
-            switch (leveldata[mapX[x]][mapY[x]])
+            switch (leveldata[mapX[x]][mapY[x]].block_id)
             {
             case 1:
                 color = cBlue;
@@ -914,7 +915,7 @@ void drawWorldGeoFlat(double* wallDist, int* side, int* mapX, int* mapY)
         }
         else
         {
-            switch (leveldata[mapX[x]][mapY[x]])
+            switch (leveldata[mapX[x]][mapY[x]].block_id)
             {
             case 1:
                 color = cBlue;
@@ -971,21 +972,41 @@ void drawWorldGeoTex(double* wallDist, int* side, int* mapX, int* mapY)
         //Calculate height of line to draw on screen
         lineHeight = (int)(gscreenHeight / wallDist[x]);
         //choose a texture
-        switch (leveldata[mapX[x]][mapY[x]])
+        // switch (leveldata[mapX[x]][mapY[x]].wallTex)
+        // {
+        // case 0:
+        //     gcurrTex = gwallTex[0];
+        //     SDL_QueryTexture(gcurrTex, NULL, NULL, &gtexWidth, &gtexHeight);
+        //     break; //"red" flat color
+        // case 1:
+        //     gcurrTex = gwallTex[1];
+        //     SDL_QueryTexture(gcurrTex, NULL, NULL, &gtexWidth, &gtexHeight);
+        //     break; //"green"
+        // default:
+        //     gcurrTex = gDoorTex;
+        //     SDL_QueryTexture(gcurrTex, NULL, NULL, &gtexWidth, &gtexHeight);
+        //     break; //"blue"
+        // }
+        int currentWall = 0;
+        if (side[x] == 1 && rayDirY > 0) //NORTH WALL
+            currentWall = 0;
+        else if (side[x] == 1 && rayDirY < 0) //SOUTH WALL
+            currentWall = 1;
+        else if (side[x] == 0 && rayDirX < 0) //EAST WALL
+            currentWall = 2;
+        else //WEST WALL??
+            currentWall = 3;
+
+        if(leveldata[mapX[x]][mapY[x]].wallTex[currentWall] < totalWallTextures)
         {
-        case 1:
-            gcurrTex = gwallTex[0];
-            SDL_QueryTexture(gcurrTex, NULL, NULL, &gtexWidth, &gtexHeight);
-            break; //"red" flat color
-        case 2:
-            gcurrTex = gwallTex[1];
-            SDL_QueryTexture(gcurrTex, NULL, NULL, &gtexWidth, &gtexHeight);
-            break; //"green"
-        default:
-            gcurrTex = gDoorTex;
-            SDL_QueryTexture(gcurrTex, NULL, NULL, &gtexWidth, &gtexHeight);
-            break; //"blue"
+            gcurrTex = gwallTex[leveldata[mapX[x]][mapY[x]].wallTex[currentWall]];
         }
+        else
+        {
+            gcurrTex = gwallTex[0];
+        }
+
+        SDL_QueryTexture(gcurrTex, NULL, NULL, &gtexWidth, &gtexHeight);        
 
         //calculate value of wallX
         if (side[x] == 0)
@@ -1196,14 +1217,14 @@ void close()
 {
     //destroy renderer
     SDL_DestroyTexture(gskyTex);
-    SDL_DestroyTexture(gDoorTex);
+    //SDL_DestroyTexture(gDoorTex);
     SDL_DestroyTexture(gwallTex[0]);
     SDL_DestroyTexture(gwallTex[1]);
     SDL_DestroyTexture(gfloorTex);
     SDL_DestroyTexture(gceilTex);
     SDL_DestroyTexture(weaponTex);
     gskyTex = NULL;
-    gDoorTex = NULL;
+    //gDoorTex = NULL;
     gwallTex[0] = NULL;
     gwallTex[1] = NULL;
     gfloorTex = NULL;
@@ -1224,6 +1245,7 @@ void renderTexture(SDL_Texture *tex, SDL_Renderer *ren, SDL_Rect dst, SDL_Rect *
 }
 void renderTexture(SDL_Texture *tex, SDL_Renderer *ren, int x, int y, SDL_Rect *clip = nullptr)
 {
+    //draw entire texture at given x y
     SDL_Rect dst;
     dst.x = x;
     dst.y = y;
@@ -1396,9 +1418,9 @@ void drawMiniMap()
     {
         for(int x = 0; x < mapWidth; x++)
         {
-            if(leveldata[x][y])
+            if(leveldata[x][y].visible)
             {
-                switch(leveldata[x][y])
+                switch(leveldata[x][y].block_id)
                 {
                     case(1):
                         SDL_SetRenderDrawColor(gRenderer, cBlue.r, cBlue.g, cBlue.b, cBlue.a);
@@ -1514,7 +1536,7 @@ void loadLevel(std::string path)
         for (int x = 0; x < mapWidth; x++)
         {
             mapFile >> a;
-            leveldata.at(x).at(y) = a;
+            changeBlock(&leveldata.at(x).at(y), a);
         }
     }
 
@@ -1525,18 +1547,24 @@ void changeFOV(bool rel, double newFOV)
 {
     if(rel)
     {
-        if((hFOV + newFOV > 180) || (hFOV + newFOV < 50))
+        if((hFOV + newFOV >= 180) || (hFOV + newFOV < 45))
             return;
-        double mult = std::tan((hFOV * degToRad)/2) / std::tan(((hFOV+newFOV) * degToRad)/2);
-        hFOV += newFOV;
-        dirX *= mult;
-        dirY *= mult;
+        if(std::tan(hFOV+newFOV* degToRad) != 0)
+        {
+            double mult = std::tan((hFOV * degToRad)/2) / std::tan(((hFOV+newFOV) * degToRad)/2);
+            hFOV += newFOV;
+            dirX *= mult;
+            dirY *= mult;
+        }
     }
     else
     {
-        double mult = hFOV/newFOV;
-        hFOV = newFOV;
-        dirX *= mult;
-        dirY *= mult;
+        if(std::tan(newFOV* degToRad) != 0)
+        {
+            double mult = std::tan((hFOV * degToRad)/2) / std::tan(((newFOV) * degToRad)/2);
+            hFOV = newFOV;
+            dirX *= mult;
+            dirY *= mult;
+        }
     }
 }
