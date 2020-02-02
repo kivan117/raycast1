@@ -80,6 +80,7 @@ raycaster.code-workspace
 /sprites/**
 /textures/**
 zombie.png
+loading_splash.xpm
 raycaster
 raycaster.exe
 raycaster.backup

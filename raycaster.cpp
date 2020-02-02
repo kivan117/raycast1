@@ -15,7 +15,7 @@
 #endif
 
 //some const values for our screen resolution
-bool debugColors = false, ceilingOn = false, enableInput = false;
+bool debugColors = false, ceilingOn = false, enableInput = false, mapOn = false;
 int mapWidth = 24;
 int mapHeight = 24;
 const int gscreenWidth =  960;//1920;//1280; //640; //720; //800; //960;
@@ -24,6 +24,22 @@ double minBrightness = 0.00; // 0 to 1, global minimum brightness for the level
 double torchBrightness = 1; // 0 - 1; multipler affecting torch light radius around player
 double fogMultiplier = 1; // used to raise or lower the thickness of the darkness / fog effect
 SDL_Color fogColor = {0,0,0,0};
+
+const SDL_Color cRed = {255,0,0,255};
+const SDL_Color cGreen = {0,255,0,255};
+const SDL_Color cBlue = {0,0,255,255};
+const SDL_Color cYellow = {255,255,0,255};
+const SDL_Color cCyan = {0,255,255,255};
+const SDL_Color cMagenta = {255,0,255,255};
+const SDL_Color cWhite = {255,255,255,255};
+const SDL_Color cBlack = {0,0,0,255};
+
+SDL_Rect miniMapRect = {gscreenWidth - mapWidth - gscreenWidth/16,  //draw the background of the minimap
+                        gscreenHeight / 16,
+                        mapWidth,
+                        mapHeight};
+SDL_Rect miniMapDot = {miniMapRect.x, miniMapRect.y, 2, 2}; //for drawing dots on the minimap
+
 bool fogOn = false;
 bool vertSyncOn = true;
 double floorDist[gscreenHeight];
@@ -35,6 +51,7 @@ const double degToRad = M_PI / 180;
 double hFOV = 90.0;  //horizontal field of view in degrees
 double vertLook = 0;  // number of pixels to look up/down
 double vertHeight = 0;
+double vertSpeed = 0.1;
 
 bool sprinting = false;
 
@@ -47,6 +64,8 @@ double moveSpeed = 0;
 double viewTrip = 0.0; //fun effect to stretch and curve floor/ceiling. totally useless
 double blockAheadDist = 500;
 int blockAheadX = 0, blockAheadY = 0;
+int blockLeftX = 0, blockLeftY = 0;
+int blockRightX = 0, blockRightY = 0;
 double mouseSense = 0.25;
 double mouseVertSense = 0.75;
 Uint64 oldtime = 0;
@@ -90,6 +109,7 @@ void calcRaycast();
 void drawWorldGeoFlat(double* wallDist, int* side, int* mapX, int* mapY);
 void drawWorldGeoTex(double* wallDist, int* side, int* mapX, int* mapY);
 void drawFloor(double* wallDist, int* drawStart, int* drawEnd, int* side, int* mapX, int* mapY);
+void drawMiniMap();
 void drawSkyBox();
 void close();
 // loads a BMP image into a texture on the rendering device
@@ -396,13 +416,25 @@ bool handleInput()
                     //delete, end, pagedown used to control camera
                     else if(currentKeyStates[SDL_SCANCODE_DELETE]) //horizontal FOV
                     {
-                        changeFOV(true, e.wheel.y);
+                        fogColor.r = std::min(255,std::max(0,fogColor.r+2*e.wheel.y));
                     }
                     else if (currentKeyStates[SDL_SCANCODE_END]) //mouse horizontal sensitivity
                     {
-                        mouseSense = std::min(5.0,std::max(0.01,mouseSense+0.01*e.wheel.y));
+                        fogColor.g = std::min(255,std::max(0,fogColor.g+2*e.wheel.y)); 
                     }
                     else if (currentKeyStates[SDL_SCANCODE_PAGEDOWN]) //mouse vertical sensitivity
+                    {
+                        fogColor.b = std::min(255,std::max(0,fogColor.b+2*e.wheel.y));
+                    }
+                    else if (currentKeyStates[SDL_SCANCODE_8]) //mouse vertical sensitivity
+                    {
+                        changeFOV(true, e.wheel.y);
+                    }
+                    else if (currentKeyStates[SDL_SCANCODE_9]) //mouse vertical sensitivity
+                    {
+                        mouseSense = std::min(5.0,std::max(0.01,mouseSense+0.01*e.wheel.y));
+                    }
+                    else if (currentKeyStates[SDL_SCANCODE_0]) //mouse vertical sensitivity
                     {
                         mouseVertSense = std::min(5.0,std::max(0.01,mouseVertSense+0.01*e.wheel.y));
                     }
@@ -442,6 +474,11 @@ bool handleInput()
                                     }
                                 }
                             }
+                            break;
+                        }
+                        case SDLK_F6:
+                        {
+                            mapOn = !(mapOn);
                             break;
                         }
                         case SDLK_F7:
@@ -668,7 +705,7 @@ bool handleInput()
     }
     if(currentKeyStates[SDL_SCANCODE_Z])
     {
-        vertHeight -= 1;
+        vertHeight -= ((double)gscreenHeight*vertSpeed) * moveSpeed; //screen height corresponds to 1 absolute world unit
         if(vertHeight < (-gscreenHeight/5))
             vertHeight = (-gscreenHeight/5);
         for(int y = 0; y < gscreenHeight; y++) //define a height table for floor and ceiling calculations later
@@ -679,7 +716,7 @@ bool handleInput()
     }
     else if(currentKeyStates[SDL_SCANCODE_X])
     {
-        vertHeight += 1;
+        vertHeight += ((double)gscreenHeight*vertSpeed) * moveSpeed;
         if(vertHeight > (2*gscreenHeight/5))
             vertHeight = (2*gscreenHeight/5);
         for(int y = 0; y < gscreenHeight; y++) //define a height table for floor and ceiling calculations later
@@ -818,13 +855,22 @@ void calcRaycast()
             blockAheadX = mapX[x];
             blockAheadY = mapY[x];
         }
+        else if(x == 0) //store location of block that's in our leftmost periphery
+        {        
+            blockLeftX = mapX[x];
+            blockLeftY = mapY[x];
+        }
+        else if(x == gscreenWidth -1) //store location of block that's in our rightmost periphery
+        {        
+            blockRightX = mapX[x];
+            blockRightY = mapY[x];
+        }
 
     }
     if(debugColors)
         drawWorldGeoFlat(wallDist, side, mapX, mapY);
     else
         drawWorldGeoTex(wallDist, side, mapX, mapY);
-
 }
 
 void drawWorldGeoFlat(double* wallDist, int* side, int* mapX, int* mapY)
@@ -850,20 +896,20 @@ void drawWorldGeoFlat(double* wallDist, int* side, int* mapX, int* mapY)
             switch (leveldata[mapX[x]][mapY[x]])
             {
             case 1:
-                color = {0xff, 0x00, 0x00, 0xff};
-                break; //red
+                color = cBlue;
+                break;
             case 2:
-                color = {0x00, 0xff, 0x00, 0xff};
-                break; //green
+                color = cGreen;
+                break;
             case 3:
-                color = {0x00, 0x00, 0xff, 0xff};
-                break; //blue
+                color = cRed;
+                break;
             case 4:
-                color = {0xff, 0xff, 0xff, 0xff};
-                break; //white
+                color = cWhite;
+                break;
             default:
-                color = {0xff, 0xff, 0x00, 0xff};
-                break; //yellow
+                color = cYellow;
+                break;
             }
         }
         else
@@ -871,21 +917,25 @@ void drawWorldGeoFlat(double* wallDist, int* side, int* mapX, int* mapY)
             switch (leveldata[mapX[x]][mapY[x]])
             {
             case 1:
-                color = {0x7f, 0x00, 0x00, 0xff};
-                break; //red
+                color = cBlue;
+                break;
             case 2:
-                color = {0x00, 0x7f, 0x00, 0xff};
-                break; //green
+                color = cGreen;
+                break;
             case 3:
-                color = {0x00, 0x00, 0x7f, 0xff};
-                break; //blue
+                color = cRed;
+                break;
             case 4:
-                color = {0x7f, 0x7f, 0x7f, 0xff};
-                break; //white
+                color = cWhite;
+                break;
             default:
-                color = {0x7f, 0x7f, 0x00, 0xff};
-                break; //yellow
+                color = cYellow;
+                break;
             }
+            color.r = color.r * 0.5;
+            color.g = color.g * 0.5;
+            color.b = color.b * 0.5;
+            color.a = color.a * 0.5;
         }
 
         //calculate lowest and highest pixel to fill in current stripe
@@ -1327,11 +1377,56 @@ void generatefogMask(SDL_Texture* tex, int* drawStart, int* drawEnd, double* wal
 void drawHud()
 {
     drawWeap();
+    if(mapOn)
+        drawMiniMap();
     return;
 }
 void drawWeap()
 {
     renderTexture(weaponTex, gRenderer, weaponDestRect, &weaponTexRect);
+    return;
+}
+
+void drawMiniMap()
+{
+
+    SDL_SetRenderDrawColor(gRenderer, cBlack.r, cBlack.g, cBlack.b, cBlack.a);
+    SDL_RenderFillRect(gRenderer, &miniMapRect);
+    for(int y = 0; y < mapHeight; y++)
+    {
+        for(int x = 0; x < mapWidth; x++)
+        {
+            if(leveldata[x][y])
+            {
+                switch(leveldata[x][y])
+                {
+                    case(1):
+                        SDL_SetRenderDrawColor(gRenderer, cBlue.r, cBlue.g, cBlue.b, cBlue.a);
+                        break;
+                    case(2):
+                        SDL_SetRenderDrawColor(gRenderer, cGreen.r, cGreen.g, cGreen.b, cGreen.a);
+                        break;
+                    case(3):
+                        SDL_SetRenderDrawColor(gRenderer, cRed.r, cRed.g, cRed.b, cRed.a);
+                        break;
+                    default:
+                        SDL_SetRenderDrawColor(gRenderer, cBlack.r, cBlack.g, cBlack.b, cBlack.a);
+                        break;
+                }
+                miniMapDot.x = miniMapRect.x + 2*x;
+                miniMapDot.y = miniMapRect.y + 2*y;
+                SDL_RenderDrawRect(gRenderer, &miniMapDot);
+            }
+        }
+    }
+    SDL_SetRenderDrawColor(gRenderer, cYellow.r, cYellow.g, cYellow.b, cYellow.a);
+    miniMapDot.x = miniMapRect.x + 2*(int)posX;
+    miniMapDot.y = miniMapRect.y + 2*(int)posY;
+    SDL_RenderDrawRect(gRenderer, &miniMapDot);
+    SDL_SetRenderDrawColor(gRenderer, cCyan.r, cCyan.g, cCyan.b, cCyan.a);
+    SDL_RenderDrawLine(gRenderer, miniMapRect.x + 2*(int)posX, miniMapRect.y + 2*(int)posY, miniMapRect.x + 2*(int)(blockLeftX), miniMapRect.y + 2*(int)(blockLeftY));
+    SDL_RenderDrawLine(gRenderer, miniMapRect.x + 2*(int)posX, miniMapRect.y + 2*(int)posY, miniMapRect.x + 2*(int)(blockRightX), miniMapRect.y + 2*(int)(blockRightY));
+    SDL_RenderDrawLine(gRenderer, miniMapRect.x + 2*(int)posX, miniMapRect.y + 2*(int)posY, miniMapRect.x + 2*(int)(blockAheadX), miniMapRect.y + 2*(int)(blockAheadY));
     return;
 }
 
@@ -1359,13 +1454,37 @@ void newlevel(bool warpView)
         loadLevel(levelFileName.str());
 
         //reset all the camera stuff
-        dirX = std::tan((hFOV*degToRad)/2);
+        //dirX = std::tan((hFOV*degToRad)/2);
+        dirX = std::sqrt(dirX*dirX+dirY*dirY); //preserve hfov. not sure why the other way isn't working
         dirY = 0;        
         planeX = 0;
         planeY = 1;
         vertLook = 0;
         vertHeight = 0;
         viewTrip = 0;
+
+        for(int y = 0; y < gscreenHeight; y++) //define a height table for floor and ceiling calculations later
+        {
+            floorDist[y] = (gscreenHeight+(2*vertHeight)) / ((2.0*(y-vertLook) - (gscreenHeight)));
+            ceilDist[y] = (gscreenHeight-(2*vertHeight)) / ((2.0*(y+vertLook) - (gscreenHeight)));
+        }
+        int tw, th;
+        SDL_QueryTexture(gskyTex, NULL, NULL, &tw, &th);
+        gskySrcRect.y = (int)std::round(((double)th/2.0 - (double)gskySrcRect.h/2.0) - ((double)vertLook * ((double)gskySrcRect.h/(double)gskyDestRect.h)));
+        if (gskySrcRect.y < 0)
+            gskySrcRect.y = 0;
+        if(debugColors)
+        {
+            gfloorRect.y = gscreenHeight / 2 + vertLook;
+            gfloorRect.h = gscreenHeight - gfloorRect.y;
+        }
+
+        miniMapRect = { gscreenWidth - (mapWidth*2) - gscreenWidth/16,
+                        gscreenHeight / 16,
+                        mapWidth*2,
+                        mapHeight*2 };
+
+
         enableInput = true;
 }
 
