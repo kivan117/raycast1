@@ -5,3 +5,4 @@ Transparent walls
 Mirrors / Portals
 Config file
 Make fog respect changes in FOV
+Fix height to be in world coordinates, not screen coordinates

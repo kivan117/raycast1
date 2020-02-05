@@ -989,13 +989,13 @@ void drawWorldGeoTex(double* wallDist, int* side, int* mapX, int* mapY)
         // }
         int currentWall = 0;
         if (side[x] == 1 && rayDirY > 0) //NORTH WALL
-            currentWall = 0;
+            currentWall = NORTH;
         else if (side[x] == 1 && rayDirY < 0) //SOUTH WALL
-            currentWall = 1;
+            currentWall = SOUTH;
         else if (side[x] == 0 && rayDirX < 0) //EAST WALL
-            currentWall = 2;
+            currentWall = EAST;
         else //WEST WALL??
-            currentWall = 3;
+            currentWall = WEST;
 
         if(leveldata[mapX[x]][mapY[x]].wallTex[currentWall] < totalWallTextures)
         {
