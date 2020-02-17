@@ -1,14 +1,15 @@
-#include <SDL2/SDL.h>
-#include <stdio.h>
+#include <SDL2/SDL.h> //SDL main library functions
 #include <cmath>
+#include <vector>
 #include <string>
-#include <sstream>
+#include <stdio.h>
 #include <iostream>
+#include <sstream>
 #include <fstream>
 #include <iomanip>
-#include <vector>
-#include "blocktypes.h"
+#include "blocktypes.h" //world map blocks
 
+//some constants for handling files on different operating systems
 #ifdef _WIN32
     const char PATH_SYM = '\\';
 #else
@@ -16,16 +17,30 @@
 #endif
 
 //some const values for our screen resolution
-bool debugColors = false, ceilingOn = false, enableInput = false, mapOn = false;
-int mapWidth = 24;
+bool debugColors = false; //toggle rendering textures or just draw world geometry with plain colors
+bool ceilingOn = false; //toggle drawing ceiling tiles or skybox when textures are turned on
+bool enableInput = false; //can temporarily turn off player input (does not affect most debug hotkeys)
+
+int mapWidth = 24; //setup some defualt map dimensions. will be overridden when loading the level
 int mapHeight = 24;
+
+//really shitty way to set internal rendering dimensions.
+//TODO: stop hard coding screen dimensions. load from config file instead
 const int gscreenWidth =  960;//1920;//1280; //640; //720; //800; //960;
 const int gscreenHeight = 540;//1080;//720; //360; //405; //450; //540;
-double minBrightness = 0.00; // 0 to 1, global minimum brightness for the level
-double torchBrightness = 1; // 0 - 1; multipler affecting torch light radius around player
-double fogMultiplier = 1; // used to raise or lower the thickness of the darkness / fog effect
-SDL_Color fogColor = {0,0,0,0};
 
+bool vertSyncOn = true;
+bool letterboxOn = true;
+
+double worldFog = 0.0; // 0 to 1. 0 is thickest, 1 is non-existent. World-wide fog minimum density.
+double playerFog = 1.0; // 0 - 1. 0 is thickest, 1 is non-existent. Fog density starting at the player.
+double fogMultiplier = 1; // Multiplied by distance from player. Adjusts the distance at which the fog transitions from player to global levels
+SDL_Color fogColor = {0,0,0,0}; // RGBA values for fog. Alpha is ignored and determined by the above values
+bool fogOn = false; //toggled fog effect on/off for performance
+double brightSin[gscreenWidth]; //fog distance is in relation to viewing plane
+                                //this lookup table is used to curve it and give better effect
+
+//some color values for convenience
 const SDL_Color cRed = {255,0,0,255};
 const SDL_Color cGreen = {0,255,0,255};
 const SDL_Color cBlue = {0,0,255,255};
@@ -40,108 +55,128 @@ SDL_Rect miniMapRect = {gscreenWidth - mapWidth - gscreenWidth/16,  //draw the b
                         mapWidth,
                         mapHeight};
 SDL_Rect miniMapDot = {miniMapRect.x, miniMapRect.y, 2, 2}; //for drawing dots on the minimap
+bool mapOn = false; //toggle mini map on/off
 
-bool fogOn = false;
-bool vertSyncOn = true;
 double floorDist[gscreenHeight];
 double ceilDist[gscreenHeight];
-double brightSin[gscreenWidth];
 
-const double radToDeg = 180 / M_PI;
+const double radToDeg = 180 / M_PI; //convenience numbers
 const double degToRad = M_PI / 180;
+
 double hFOV = 90.0;  //horizontal field of view in degrees
-double vertLook = 0;  // number of pixels to look up/down
-double vertHeight = 0;
-double vertSpeed = 0.1;
+//double vFOV = (hFOV/gscreenWidth * gscreenHeight) / (std::atan((double)gscreenHeight/(double)gscreenWidth)*radToDeg*2.0);
+double vFOV = 1.0; //not really used right now, but could be used to alter wall height
+double vertLook = 0;  // number of pixels to look up/down. in screen coordinates
+double vertHeight = 0; //center of the screen (offset in screen coordinates)
+double vertSpeed = 0.1; //multiplier to control player's change in vertHeight (framerate independent)
 
 bool sprinting = false;
 
+
+
+//player position and screen plane coordinates:
+//
+//posX, posY are player position in world coordinates. each "1" is a full world block
+//dirX, dirY are relative to player position and indicate the direction the player is facing
+//planeX, planeY relative to dirX, dirY and used for player perspective projection (screen) plane
+//
+//relationship of dir vector length to plane vector length will change fov
+//
+//
+//         this length controlled by FOV
+//             |
+//             v
+//         *===========>* dirX, dirY
+//     posX,posY        |
+//                      | <-this length static value 1
+//                      |
+//                      * planeX, planeY
+//
+//
 double planeX = 0, planeY = 1;
+double posX = 2, posY = 2;         //x and y start position, overridden during map load
+double dirX = std::tan((hFOV * degToRad)/2), dirY = 0;         //initial direction vector is east (0 degrees)
 
-double posX = 2, posY = 2;         //x and y start position
-double dirX = std::tan((hFOV * degToRad)/2), dirY = 0;         //initial direction vector straight down
+double moveSpeed = 0; //multiplier for frame rate independent movement speed
 
-double moveSpeed = 0;
-double viewTrip = 0.0; //fun effect to stretch and curve floor/ceiling. totally useless
-double blockAheadDist = 500;
-int blockAheadX = 0, blockAheadY = 0;
-int blockLeftX = 0, blockLeftY = 0;
-int blockRightX = 0, blockRightY = 0;
-double mouseSense = 0.25;
-double mouseVertSense = 0.75;
+double viewTrip = 0.0; //fun effect to stretch and curve floor/ceiling. totally useless. fun side effect of trying to get floor casting math right
+
+double blockAheadDist = 500; //distance to the nearest block straight ahead of player. reset durign each raycast calculation loop
+int blockAheadX = 0, blockAheadY = 0; //world coordinates of the nearest block that's straight ahead
+int blockLeftX = 0, blockLeftY = 0; //same but this is the block furthest to the player's left that's on screen. used for minimap only
+int blockRightX = 0, blockRightY = 0; //block furthest right that's on screen. used for minimap only
+
+double mouseSense = 0.25; //horizontal mouse sensitivity multiplier
+double mouseVertSense = 0.75; //vertical mouse sensitivity multiplier
+
+//some numbers for frame time calculation. used for frame rate independence and performance calculations
 Uint64 oldtime = 0;
 Uint64 gtime = 0;
 unsigned int framecounter = 0;
+
+//game window
 SDL_Window *gwindow = NULL;
-//The window renderer
+
+//The window renderer. hardware accelerated backend
 SDL_Renderer *gRenderer = NULL;
-SDL_Texture *gcurrTex = NULL; //the texture we're actually currently copying during render
-//SDL_Texture *gDoorTex = NULL;
-SDL_Texture **gwallTex = NULL;
-SDL_Texture *gskyTex = NULL;
-SDL_Texture *gfloorTex = NULL;
-SDL_Texture *gceilTex = NULL;
-SDL_Texture *gfloorBuffer = NULL;
-SDL_Texture *gfogTex = NULL;
-SDL_Texture *weaponTex = NULL;
-int gtexWidth = 0;
-int gtexHeight = 0;
-const int totalWallTextures = 3;
-//int fogQuality = 1; //power of 2, world geometry fog only sampled every nth pixels
-SDL_Rect gfloorRect;
-SDL_Rect gskyDestRect;
-SDL_Rect gskySrcRect;
-SDL_Rect weaponTexRect = {0,0,0,0};
-SDL_Rect weaponDestRect;
-std::stringstream ssFPS;
+SDL_Texture *gcurrTex = NULL; //the texture we're actually currently copying from during render
+SDL_Texture **gwallTex = NULL;//wall textures
+SDL_Texture *gskyTex = NULL; //skybox texture
+SDL_Texture *gfloorTex = NULL; //floor texture
+SDL_Texture *gceilTex = NULL; //ceiling texture
+SDL_Texture *gfloorBuffer = NULL; //buffer texture. calculated perspective mapping of the floor and ceiling will be plotted onto this buffer
+SDL_Texture *gfogTex = NULL; //buffer texture. calculated fog will be plotted onto this texture
+SDL_Texture *weaponTex = NULL; //current player weapon (from first person perspective)
 
-//std::vector<std::vector<int>> leveldata;
-std::vector<std::vector<Map_Block>> leveldata;
+const int totalWallTextures = 3; //number of unique wall textures. needs to be read from a config or dynamically calculated
 
-bool init();
-bool initWindow();
-bool initTextures();
-void newlevel(bool warpView);
-void loadLevel(std::string path);
-bool update();
-bool handleInput();
-void updateScreen();
+SDL_Rect gskyDestRect; //used for skybox. where (on screen) to draw the skybox
+SDL_Rect gskySrcRect; //used for skybox. where (on skybox texture) to grab current skybox from
+SDL_Rect gfloorRect; //only used for debug colors. determines where to draw floor color on screen
+SDL_Rect weaponTexRect = {0,0,0,0}; //source rectangle. where (on weapons texture) to get current weapon image
+SDL_Rect weaponDestRect; //where (on screen) to draw weapon
 
-//calculate all raytracing steps and render the resulting walls
-void calcRaycast();
-//abstracted out the 2 types of possible world geometry drawing... the resulting functions are really ugly and need fixed because it as a quick hack
-void drawWorldGeoFlat(double* wallDist, int* side, int* mapX, int* mapY);
-void drawWorldGeoTex(double* wallDist, int* side, int* mapX, int* mapY);
-void drawFloor(double* wallDist, int* drawStart, int* drawEnd, int* side, int* mapX, int* mapY);
-void drawMiniMap();
-void drawSkyBox();
-void close();
-// loads a BMP image into a texture on the rendering device
-SDL_Texture *loadTexture(const std::string &file, SDL_Renderer *ren);
-// draw an SDL_texture to and SDL_renderer at position x,y
-void renderTexture(SDL_Texture *tex, SDL_Renderer *ren, SDL_Rect dst, SDL_Rect *clip);
+
+std::stringstream ssFPS; //string for window title. currently used for debug info (FPS, FOV, etc)
+
+std::vector<std::vector<Map_Block>> leveldata; //current map information as a 2d dynamic size array
+
+bool init(); //basic start-SDL stuff
+bool initWindow(); //get window and hardware accelerated (if possible) renderer
+bool initTextures(); //load in assets and make textures from them all
+void newlevel(bool warpView); //reset some basic settings and load another level
+void loadLevel(std::string path); //read in map data and populate leveldata array with it
+bool update(); //update world 1 tick
+bool handleInput(); //react to player input.
+void updateScreen(); //draw stuff
+void calcRaycast(); //calculate all raytracing. calls draw world when it's done
+void calcFloorDist();
+void drawWorldGeoFlat(double* wallDist, int* side, int* mapX, int* mapY); //draw world with debug colors
+void drawWorldGeoTex(double* wallDist, int* side, int* mapX, int* mapY); //draw world with textures
+void drawFloor(double* wallDist, int* drawStart, int* drawEnd, int* side, int* mapX, int* mapY); //calculate and draw perspective floor and ceiling
+void drawMiniMap(); //draw little debug color minimap
+void drawSkyBox(); //paste a skybox
+void close(); //prepare to quit game
+SDL_Texture *loadTexture(const std::string &file, SDL_Renderer *ren); // loads a BMP image into a texture on the rendering device
+void renderTexture(SDL_Texture *tex, SDL_Renderer *ren, SDL_Rect dst, SDL_Rect *clip); // draw an SDL_texture to an SDL_renderer at position x,y
 void renderTexture(SDL_Texture *tex, SDL_Renderer *ren, int x, int y, SDL_Rect *clip);
-//get working directory, account for different folder symbol in windows paths
-std::string getProjectPath(const std::string &subDir);
-//load BMP, return texture
-SDL_Texture *loadImage(std::string path);
-SDL_Texture *loadImageColorKey(std::string path);
-void generatefogMask(SDL_Texture* tex, int* drawStart, int* drawEnd, double* wallDist);
-void drawHud(); //just stub functions for now
-void drawWeap();
-void changeFOV(bool rel, double newFOV);
+std::string getProjectPath(const std::string &subDir);//get working directory, account for different folder symbol in windows paths
+SDL_Texture *loadImage(std::string path);//load BMP, return texture
+SDL_Texture *loadImageColorKey(std::string path, SDL_Color transparent);//load BMP with color key transparency, return texture
+void generatefogMask(SDL_Texture* tex, int* drawStart, int* drawEnd, double* wallDist); //calculate fog using current settings and populate texture with results
+void drawHud(); //just calls the various HUD related draw commands
+void drawWeap(); //paste current player weapon on screen
+void changeFOV(bool rel, double newFOV); //alters player camera FOV by changing length of direction vector
+void resizeWindow(bool letterbox);
 
 int main(int argc, char **argv)
 {
     //init SDL
     if (init())
     {
-
-        newlevel(false);        
-        
+        newlevel(false);      
         //Main loop flag
         bool quit = false;
-
         while (!quit)
         {
             quit = update();
@@ -152,7 +187,7 @@ int main(int argc, char **argv)
     else
     {
         close();
-        printf("Something crucial broke. Rage quitting.");
+        printf("Game initialization failed. Something crucial broke. Rage quitting.\n");
     }
 
     return 0;
@@ -161,6 +196,8 @@ int main(int argc, char **argv)
 bool init()
 {
     bool success = true;
+
+    
 
     if (SDL_Init(SDL_INIT_VIDEO) < 0) //init video, if fail, print error
     {
@@ -188,7 +225,7 @@ bool initWindow()
 {
     bool success = true;
     //create window
-    gwindow = SDL_CreateWindow("Raycast Test. FPS: ", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, gscreenWidth, gscreenHeight, SDL_WINDOW_RESIZABLE);
+    gwindow = SDL_CreateWindow("Raycast Test. FPS: ", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, gscreenWidth, gscreenHeight, SDL_WINDOW_RESIZABLE | SDL_WINDOW_OPENGL);
     if (gwindow == NULL) //window failed to create?
     {
         success = false;
@@ -197,8 +234,8 @@ bool initWindow()
     else //successful window creation
     {
         //Create renderer for window
-        SDL_SetHint(SDL_HINT_RENDER_DRIVER, "opengl");
-        gRenderer = SDL_CreateRenderer(gwindow, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+        SDL_SetHint(SDL_HINT_RENDER_DRIVER, "opengl"); //hopefully use opengl
+        gRenderer = SDL_CreateRenderer(gwindow, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC | SDL_RENDERER_TARGETTEXTURE);
         if (gRenderer == NULL)
         {
             printf("Renderer could not be created! SDL Error: %s\n", SDL_GetError());
@@ -224,6 +261,10 @@ bool initWindow()
             gskyDestRect.w = gscreenWidth;
             gskyDestRect.h = gscreenHeight;//  /2;
             SDL_SetRelativeMouseMode(SDL_bool(true)); // lock the cursor to the window, now that we have focus
+
+            SDL_RendererInfo rendererInfo;
+            SDL_GetRendererInfo(gRenderer, &rendererInfo);
+            printf("Render Driver: %s %s",rendererInfo.name,"\n");
         }
     }
     return success;
@@ -234,7 +275,10 @@ bool initTextures()
     bool success = true;
 
     // loading in the textures
-    gskyTex = loadImage("sky.bmp");
+    std::stringstream texFileName;
+    texFileName << "resources" << PATH_SYM << "textures" << PATH_SYM << "sky.bmp"; 
+    gskyTex = loadImage(texFileName.str());
+    texFileName.str(std::string());
     if (gskyTex == NULL)
     {
         success = false;
@@ -250,52 +294,37 @@ bool initTextures()
         gskySrcRect.y = skyh/4;  // adjust down 220 sky bmp height - the 137 pixels for viewing. bottom of sky bmp is horizon, top is out of view
 
     }
-    std::stringstream texFileName;
-    texFileName << "textures" << PATH_SYM << "floor0.bmp"; 
+    
+    
+    texFileName << "resources" << PATH_SYM << "textures" << PATH_SYM << "floor0.bmp"; 
     gfloorTex = loadImage(texFileName.str());
+    texFileName.str(std::string());
     if (gfloorTex == NULL)
     {
         success = false;
     }
-    texFileName.str(std::string());
-    texFileName << "textures" << PATH_SYM << "ceil0.bmp";
+    texFileName << "resources" << PATH_SYM << "textures" << PATH_SYM << "ceil0.bmp";
     gceilTex = loadImage(texFileName.str());
+    texFileName.str(std::string());
     if (gceilTex == NULL)
     {
         success = false;
     }
-    // texFileName.str(std::string());
-    // texFileName << "textures" << PATH_SYM << "door0.bmp";
-    // gDoorTex = loadImage(texFileName.str());
-    // if (gDoorTex == NULL)
-    // {
-    //     success = false;
-    // }
-    // else
-    // {
-    //     gcurrTex = gDoorTex; // set the default texture
-    //     SDL_QueryTexture(gcurrTex, NULL, NULL, &gtexWidth, &gtexHeight); //reset gcurrTex attributes
-    // }
     gwallTex = new SDL_Texture *[totalWallTextures];
     for(int i = 0; i < totalWallTextures; i++)
     {
         texFileName.str(std::string());
-        texFileName << "textures" << PATH_SYM << "wall" << i << ".bmp";
+        texFileName << "resources" << PATH_SYM << "textures" << PATH_SYM << "wall" << i << ".bmp";
         gwallTex[i] = loadImage(texFileName.str());
         if (gwallTex[i] == NULL)
         {
             success = false;
         }
     }
-    if(success)
-    {
-        gcurrTex = gwallTex[0]; // set the default texture
-        SDL_QueryTexture(gcurrTex, NULL, NULL, &gtexWidth, &gtexHeight); //reset gcurrTex attributes
-    }
 
     texFileName.str(std::string());
-    texFileName << "sprites" << PATH_SYM << "shotgun1.bmp";
-    weaponTex = loadImageColorKey(texFileName.str());
+    texFileName << "resources" << PATH_SYM << "sprites" << PATH_SYM << "shotgun1.bmp";
+    weaponTex = loadImageColorKey(texFileName.str(), cMagenta);
     if (weaponTex == NULL)
     {
         success = false;
@@ -326,11 +355,7 @@ bool initTextures()
     }
     else
     {
-        for(int y = 0; y < gscreenHeight; y++) //define a height table for floor and ceiling calculations later
-        {
-            floorDist[y] = (gscreenHeight+(2*vertHeight)) / ((2.0*(y-vertLook) - (gscreenHeight)));
-            ceilDist[y] = (gscreenHeight-(2*vertHeight)) / ((2.0*(y+vertLook) - (gscreenHeight)));
-        }
+        calcFloorDist();
         for(int x = 0; x < gscreenWidth; x++) //setup a sin lookup table for the fog mask for later
         {
             brightSin[x] = 1/sin((M_PI / 2.0)-(hFOV / 2.0 * degToRad)+(((double)x/(double)gscreenWidth)*(hFOV * degToRad)));
@@ -411,11 +436,11 @@ bool handleInput()
                     }
                     else if(currentKeyStates[SDL_SCANCODE_HOME]) //world minimum brightness
                     {
-                        minBrightness = std::min(1.0,std::max(0.0,minBrightness + (0.01*e.wheel.y)));
+                        worldFog = std::min(1.0,std::max(0.0,worldFog + (0.01*e.wheel.y)));
                     }
                     else if(currentKeyStates[SDL_SCANCODE_PAGEUP]) //local player lightsource brightness
                     {
-                        torchBrightness = std::min(1.0,std::max(0.0,torchBrightness + (0.01*e.wheel.y)));
+                        playerFog = std::min(1.0,std::max(0.0,playerFog + (0.01*e.wheel.y)));
                     }
                     //delete, end, pagedown used to control camera
                     else if(currentKeyStates[SDL_SCANCODE_DELETE]) //horizontal FOV
@@ -478,6 +503,11 @@ bool handleInput()
                                     }
                                 }
                             }
+                            break;
+                        }
+                        case SDLK_F5:
+                        {
+                            letterboxOn = !(letterboxOn);
                             break;
                         }
                         case SDLK_F6:
@@ -551,13 +581,7 @@ bool handleInput()
             {
                 if (e.window.event == SDL_WINDOWEVENT_RESIZED || e.window.event == SDL_WINDOWEVENT_SIZE_CHANGED)
                 {
-                    SDL_RenderSetLogicalSize(gRenderer, gscreenWidth, gscreenHeight);
-                    int newWidth = 0;
-                    int newHeight = 0;
-                    SDL_GetWindowSize(gwindow, &newWidth, &newHeight);
-                    SDL_RenderSetIntegerScale(gRenderer, SDL_bool(false));
-                    float limitingSide = std::min((float)newWidth / gscreenWidth, (float)newHeight / gscreenHeight);
-                    SDL_RenderSetScale(gRenderer, limitingSide, limitingSide);
+                    resizeWindow(letterboxOn);
                 }
                 break;
             }
@@ -574,7 +598,7 @@ bool handleInput()
         ssFPS << "Raycast Test. FPS: " << std::fixed << std::setprecision(2) << std::setfill('0') << std::setw(6) << (double)SDL_GetPerformanceFrequency() / moveSpeed
               << " | Vsync: "          << vertSyncOn
               << " | hFOV: "           << std::fixed << std::setprecision(1) << std::setfill('0') << std::setw(3) << hFOV
-              << " | Height: "         << std::fixed << std::setprecision(2) << std::setfill('0') << std::setw(4) << (gscreenHeight / 2 + vertHeight)/gscreenHeight;
+              << " | Height: "         << std::fixed << std::setprecision(2) << std::setfill('0') << std::setw(4) << vertHeight;
         SDL_SetWindowTitle(gwindow, ssFPS.str().c_str());
         ssFPS.str(std::string()); //blank the stream
     }
@@ -593,11 +617,7 @@ bool handleInput()
         vertLook -= mouseYDist*mouseVertSense;
         if(vertLook < ( (-1.0)*gscreenHeight / 2))
             vertLook = ( (-1.0)*gscreenHeight / 2);
-        for(int y = 0; y < gscreenHeight; y++) //define a height table for floor and ceiling calculations later
-        {
-            floorDist[y] = (gscreenHeight+(2*vertHeight)) / ((2.0*(y-vertLook) - (gscreenHeight)));
-            ceilDist[y] = (gscreenHeight-(2*vertHeight)) / ((2.0*(y+vertLook) - (gscreenHeight)));
-        }
+        calcFloorDist();
         int tw, th;
         SDL_QueryTexture(gskyTex, NULL, NULL, &tw, &th);
         gskySrcRect.y = (int)std::round(((double)th/2.0 - (double)gskySrcRect.h/2.0) - ((double)vertLook * ((double)gskySrcRect.h/(double)gskyDestRect.h)));
@@ -614,11 +634,7 @@ bool handleInput()
         vertLook -= mouseYDist*mouseVertSense;
         if(vertLook > (gscreenHeight / 2))
             vertLook = (gscreenHeight / 2);
-        for(int y = 0; y < gscreenHeight; y++) //define a height table for floor and ceiling calculations later
-        {
-            floorDist[y] = (gscreenHeight+(2*vertHeight)) / ((2.0*(y-vertLook) - (gscreenHeight)));
-            ceilDist[y] = (gscreenHeight-(2*vertHeight)) / ((2.0*(y+vertLook) - (gscreenHeight)));
-        }
+        calcFloorDist();
         int tw, th;
         SDL_QueryTexture(gskyTex, NULL, NULL, &tw, &th);
         gskySrcRect.y = (int)std::round(((double)th/2.0 - (double)gskySrcRect.h/2.0) - ((double)vertLook * ((double)gskySrcRect.h/(double)gskyDestRect.h)));
@@ -709,25 +725,17 @@ bool handleInput()
     }
     if(currentKeyStates[SDL_SCANCODE_Z])
     {
-        vertHeight -= ((double)gscreenHeight*vertSpeed) * moveSpeed; //screen height corresponds to 1 absolute world unit
-        if(vertHeight < (-gscreenHeight/5))
-            vertHeight = (-gscreenHeight/5);
-        for(int y = 0; y < gscreenHeight; y++) //define a height table for floor and ceiling calculations later
-        {
-            floorDist[y] = (gscreenHeight+(2*vertHeight)) / ((2.0*(y-vertLook) - (gscreenHeight)));
-            ceilDist[y] = (gscreenHeight-(2*vertHeight)) / ((2.0*(y+vertLook) - (gscreenHeight)));
-        }
+        vertHeight -= (vertSpeed) * moveSpeed; //screen height corresponds to 1 absolute world unit
+        if(vertHeight < (-0.2))
+            vertHeight = (-0.2);
+        calcFloorDist();
     }
     else if(currentKeyStates[SDL_SCANCODE_X])
     {
-        vertHeight += ((double)gscreenHeight*vertSpeed) * moveSpeed;
-        if(vertHeight > (2*gscreenHeight/5))
-            vertHeight = (2*gscreenHeight/5);
-        for(int y = 0; y < gscreenHeight; y++) //define a height table for floor and ceiling calculations later
-        {
-            floorDist[y] = (gscreenHeight+(2*vertHeight)) / ((2.0*(y-vertLook) - (gscreenHeight)));
-            ceilDist[y] = (gscreenHeight-(2*vertHeight)) / ((2.0*(y+vertLook) - (gscreenHeight)));
-        }
+        vertHeight += (vertSpeed) * moveSpeed;
+        if(vertHeight > (0.4))
+            vertHeight = (0.4);
+        calcFloorDist();
     }
     
     return quit;
@@ -874,6 +882,15 @@ void calcRaycast()
         drawWorldGeoTex(wallDist, side, mapX, mapY);
 }
 
+void calcFloorDist()
+{
+    for(int y = 0; y < gscreenHeight; y++) //define a height table for floor and ceiling calculations later
+        {
+            floorDist[y] = (gscreenHeight*vFOV+(2*vertHeight*gscreenHeight))/ ((2.0*(y-vertLook) - (gscreenHeight)));
+            ceilDist[y] = (gscreenHeight*vFOV-(2*vertHeight*gscreenHeight))/ ((2.0*(y+vertLook) - (gscreenHeight)));
+        }
+}
+
 void drawWorldGeoFlat(double* wallDist, int* side, int* mapX, int* mapY)
 {
     //draw sky
@@ -885,7 +902,7 @@ void drawWorldGeoFlat(double* wallDist, int* side, int* mapX, int* mapY)
     int lineHeight, drawStart, drawEnd;
     for (int x = 0; x < gscreenWidth; x++)
         {
-        lineHeight = (int)(gscreenHeight / wallDist[x]);
+        lineHeight = (int)(gscreenHeight * vFOV / wallDist[x]);
         //calculate lowest and highest pixel to fill in current stripe
         drawStart = -lineHeight / 2 + gscreenHeight / 2;
         drawEnd = lineHeight / 2 + gscreenHeight / 2;
@@ -940,10 +957,10 @@ void drawWorldGeoFlat(double* wallDist, int* side, int* mapX, int* mapY)
         }
 
         //calculate lowest and highest pixel to fill in current stripe
-        drawStart = -(lineHeight / 2) + (gscreenHeight / 2) + (vertHeight / wallDist[x]) + vertLook;
+        drawStart = -(lineHeight / 2) + (gscreenHeight / 2) + ((vertHeight*gscreenHeight) / wallDist[x]) + vertLook;
         if (drawStart < 0)
             drawStart = 0;
-        drawEnd = (lineHeight / 2) + (gscreenHeight / 2) + (vertHeight / wallDist[x]) + vertLook;
+        drawEnd = (lineHeight / 2) + (gscreenHeight / 2) + ((vertHeight*gscreenHeight) / wallDist[x]) + vertLook;
         if (drawEnd >= gscreenHeight)
             drawEnd = gscreenHeight - 1;
 
@@ -963,6 +980,7 @@ void drawWorldGeoTex(double* wallDist, int* side, int* mapX, int* mapY)
     double cameraX, rayDirX, rayDirY, wallX, brightness;
     int lineHeight, texX;
     int drawStart[gscreenWidth], drawEnd[gscreenWidth];
+    int currTexWidth, currTexHeight;
     
     for (int x = 0; x < gscreenWidth; x++)
     {
@@ -970,23 +988,7 @@ void drawWorldGeoTex(double* wallDist, int* side, int* mapX, int* mapY)
         rayDirX = dirX + planeX * cameraX; //the XY coord where the vector of this ray crosses the camera plane
         rayDirY = dirY + planeY * cameraX;
         //Calculate height of line to draw on screen
-        lineHeight = (int)(gscreenHeight / wallDist[x]);
-        //choose a texture
-        // switch (leveldata[mapX[x]][mapY[x]].wallTex)
-        // {
-        // case 0:
-        //     gcurrTex = gwallTex[0];
-        //     SDL_QueryTexture(gcurrTex, NULL, NULL, &gtexWidth, &gtexHeight);
-        //     break; //"red" flat color
-        // case 1:
-        //     gcurrTex = gwallTex[1];
-        //     SDL_QueryTexture(gcurrTex, NULL, NULL, &gtexWidth, &gtexHeight);
-        //     break; //"green"
-        // default:
-        //     gcurrTex = gDoorTex;
-        //     SDL_QueryTexture(gcurrTex, NULL, NULL, &gtexWidth, &gtexHeight);
-        //     break; //"blue"
-        // }
+        lineHeight = (int)(gscreenHeight * vFOV / wallDist[x]);
         int currentWall = 0;
         if (side[x] == 1 && rayDirY > 0) //NORTH WALL
             currentWall = NORTH;
@@ -1005,8 +1007,7 @@ void drawWorldGeoTex(double* wallDist, int* side, int* mapX, int* mapY)
         {
             gcurrTex = gwallTex[0];
         }
-
-        SDL_QueryTexture(gcurrTex, NULL, NULL, &gtexWidth, &gtexHeight);        
+        SDL_QueryTexture(gcurrTex, NULL, NULL, &currTexWidth, &currTexHeight);        
 
         //calculate value of wallX
         if (side[x] == 0)
@@ -1016,19 +1017,19 @@ void drawWorldGeoTex(double* wallDist, int* side, int* mapX, int* mapY)
         wallX -= floor((wallX));                   //subtract away the digits to the left of the decimal point, leaving only the fractional value across the single wall
 
         //x coordinate on the texture
-        texX = int(wallX * double(gtexWidth)); //determine exact value across the wall texture in pixels
+        texX = int(wallX * double(currTexWidth)); //determine exact value across the wall texture in pixels
         if (side[x] == 0 && rayDirX < 0)
-            texX = gtexWidth - texX - 1; //horizontally flip textures so they're drawn properly depending on the side of the cube they're on
+            texX = currTexWidth - texX - 1; //horizontally flip textures so they're drawn properly depending on the side of the cube they're on
         if (side[x] == 1 && rayDirY > 0)
-            texX = gtexWidth - texX - 1;
+            texX = currTexWidth - texX - 1;
 
         //calculate lowest and highest pixel to fill in current stripe
-        drawStart[x] = -lineHeight / 2 + (gscreenHeight / 2) + (vertHeight / wallDist[x]) + vertLook;
-        drawEnd[x] = lineHeight / 2 + (gscreenHeight / 2) + (vertHeight / wallDist[x]) + vertLook;
+        drawStart[x] = -lineHeight / 2 + (gscreenHeight / 2) + ((vertHeight*gscreenHeight) / wallDist[x]) + vertLook;
+        drawEnd[x] = lineHeight / 2 + (gscreenHeight / 2) + ((vertHeight*gscreenHeight) / wallDist[x]) + vertLook;
 
         // set up the rectangle to sample the texture for the wall
         SDL_Rect line = {x, drawStart[x], 1, drawEnd[x] - drawStart[x]};
-        SDL_Rect sample = {texX, 0, 1, gtexHeight};
+        SDL_Rect sample = {texX, 0, 1, currTexHeight};
 
         //use color mod to darken the wall texture
         //255 = no color mod, lower values mean darker
@@ -1049,7 +1050,8 @@ void drawFloor(double* wallDist, int* drawStart, int* drawEnd, int* side, int* m
 {
     //create some pointers to later access the pixels in the floor and buffer textures
     void *floorBufferPixels, *floorTexPixels, *ceilTexPixels;
-    int floorBufferPitch, floorTexPitch, ceilTexPitch, floorTexX, floorTexY, lineHeight;
+    int floorBufferPitch, floorTexPitch, ceilTexPitch, floorTexX, floorTexY;// lineHeight;
+    int floorTexWidth, floorTexHeight, ceilTexWidth, ceilTexHeight;
 
     //lock floor textures and a screen buffer texture for read/write operations
 
@@ -1116,7 +1118,7 @@ void drawFloor(double* wallDist, int* drawStart, int* drawEnd, int* side, int* m
         }
 
         //get attributes of the floor source texture
-        SDL_QueryTexture(gfloorTex, NULL, NULL, &gtexWidth, &gtexHeight);
+        SDL_QueryTexture(gfloorTex, NULL, NULL, &floorTexWidth, &floorTexHeight); //get height and width of floor tile texture
 
         //draw floor in vertical stripe from bottom of wall to bottom of screen
         for (int y = drawEnd[x]; y < gscreenHeight; y++)
@@ -1127,26 +1129,26 @@ void drawFloor(double* wallDist, int* drawStart, int* drawEnd, int* side, int* m
             currentFloorY = weight * floorYWall + (1.0 - weight) * posY;
 
             //select that pixel from the source texture
-            floorTexX = int(currentFloorX * gtexWidth) % gtexWidth;
-            floorTexY = int(currentFloorY * gtexHeight) % gtexHeight;
+            floorTexX = int(currentFloorX * floorTexWidth) % floorTexWidth;
+            floorTexY = int(currentFloorY * floorTexHeight) % floorTexHeight;
 
             //set destination pixel to the selected pixel from the source
-            bufferPixels[y * gscreenWidth + x] = ufloorTexPix[gtexWidth * floorTexY + floorTexX];
+            bufferPixels[y * gscreenWidth + x] = ufloorTexPix[floorTexWidth * floorTexY + floorTexX];
         }
         
         if(ceilingOn)
         {
-            SDL_QueryTexture(gceilTex, NULL, NULL, &gtexWidth, &gtexHeight);
+            SDL_QueryTexture(gceilTex, NULL, NULL, &ceilTexWidth, &ceilTexHeight); //get ceiling tile texture width and height
             for (int y = gscreenHeight - drawStart[x]; y < gscreenHeight; y++)
             {
                 
                 weight = (ceilDist[y] - distPlayer) / (wallDist[x] - distPlayer);
                 currentFloorX = weight * floorXWall + (1.0 - weight) * posX;
                 currentFloorY = weight * floorYWall + (1.0 - weight) * posY;
-                floorTexX = int(currentFloorX * gtexWidth) % gtexWidth;
-                floorTexY = int(currentFloorY * gtexHeight) % gtexHeight;
+                floorTexX = int(currentFloorX * ceilTexWidth) % ceilTexWidth;
+                floorTexY = int(currentFloorY * ceilTexHeight) % ceilTexHeight;
 
-                bufferPixels[(gscreenHeight - y - 1) * gscreenWidth + x] = uceilTexPix[gtexWidth * floorTexY + floorTexX];
+                bufferPixels[(gscreenHeight - y - 1) * gscreenWidth + x] = uceilTexPix[ceilTexWidth * floorTexY + floorTexX];
             }
         }
     }
@@ -1278,7 +1280,8 @@ std::string getProjectPath(const std::string &subDir = "")
         }
         else
         {
-            printf("Error getting resource path: %s\n", SDL_GetError());
+            printf("Error getting base resource path: %s\n", SDL_GetError());
+            printf("Error: Failed to get application resource base path. \n %s", SDL_GetError());
             return "";
         }
     }
@@ -1322,7 +1325,7 @@ SDL_Texture *loadImage(std::string path)
     return tex;
 }
 
-SDL_Texture *loadImageColorKey(std::string path)
+SDL_Texture *loadImageColorKey(std::string path, SDL_Color transparent)
 {
 
     static std::string projectPath = getProjectPath();
@@ -1336,7 +1339,7 @@ SDL_Texture *loadImageColorKey(std::string path)
     else
     {
         bmp = SDL_ConvertSurfaceFormat(bmp, SDL_PIXELFORMAT_RGBA32, 0);
-        SDL_SetColorKey(bmp, SDL_TRUE, SDL_MapRGB(bmp->format, 0xff, 0x00, 0xff));
+        SDL_SetColorKey(bmp, SDL_TRUE, SDL_MapRGB(bmp->format, transparent.r, transparent.g, transparent.b));
         tex = SDL_CreateTextureFromSurface(gRenderer,bmp);
 
         SDL_FreeSurface(bmp);
@@ -1368,23 +1371,23 @@ void generatefogMask(SDL_Texture* tex, int* drawStart, int* drawEnd, double* wal
         {
             if(y < drawStart[x])
             {
-                brightness = std::min(1.0,std::max(minBrightness,std::min(torchBrightness,torchBrightness/((fogMultiplier*  brightSin[x]) * ceilDist[texHeight-y] * ceilDist[texHeight-y]))));
-                fogColor.a = (Uint8)255.0*(1.0-std::min(1.0,std::max(minBrightness, brightness)));
+                brightness = std::min(1.0,std::max(worldFog,std::min(playerFog,playerFog/((fogMultiplier*  brightSin[x]) * ceilDist[texHeight-y] * ceilDist[texHeight-y]))));
+                fogColor.a = (Uint8)255.0*(1.0-std::min(1.0,std::max(worldFog, brightness)));
                 pixels[y * texWidth + x] = SDL_MapRGBA(mappingFormat, fogColor.r, fogColor.g, fogColor.b, fogColor.a);
             }
             else if(y >= drawEnd[x])
             {
-                brightness = std::min(1.0,std::max(minBrightness,std::min(torchBrightness,torchBrightness/((fogMultiplier* brightSin[x]) * floorDist[y] * floorDist[y]))));
-                fogColor.a = (Uint8)255.0*(1.0-std::min(1.0,std::max(minBrightness, brightness)));
+                brightness = std::min(1.0,std::max(worldFog,std::min(playerFog,playerFog/((fogMultiplier* brightSin[x]) * floorDist[y] * floorDist[y]))));
+                fogColor.a = (Uint8)255.0*(1.0-std::min(1.0,std::max(worldFog, brightness)));
                 pixels[y * texWidth + x] = SDL_MapRGBA(mappingFormat, fogColor.r, fogColor.g, fogColor.b, fogColor.a);
             }
             else
             {
                 lineHeight = drawEnd[x] - drawStart[x];
-                brightness = std::max(std::min(1.0, (double)lineHeight * torchBrightness * brightSin[x] / (fogMultiplier*wallDist[x]*256.0)), minBrightness);      
-                brightness = std::max(std::min((double)brightness, torchBrightness),minBrightness);
+                brightness = std::max(std::min(1.0, (double)lineHeight * playerFog * brightSin[x] / (fogMultiplier*wallDist[x]*256.0)), worldFog);      
+                brightness = std::max(std::min((double)brightness, playerFog),worldFog);
 
-                fogColor.a = (Uint8)255.0*(1.0-std::min(1.0,std::max(minBrightness, brightness)));
+                fogColor.a = (Uint8)255.0*(1.0-std::min(1.0,std::max(worldFog, brightness)));
                 pixels[y * texWidth + x] = SDL_MapRGBA(mappingFormat, fogColor.r, fogColor.g, fogColor.b, fogColor.a);
             }
             
@@ -1470,26 +1473,30 @@ void newlevel(bool warpView)
         //eventually this might get replced with the random level gen function or something else
         std::stringstream levelFileName;
         srand(time(0));
-        levelFileName << getProjectPath("maps") << "map" << std::to_string(rand() % 20) << ".txt";
+        std::string thisMap;
+        thisMap += "map";
+        thisMap += std::to_string(rand() % 20);
+        levelFileName << getProjectPath("resources") << PATH_SYM << "maps" << PATH_SYM << thisMap << ".txt";
         ceilingOn = rand()%2;
-        printf("Map: %s\n", levelFileName.str().c_str());
+        printf("Map: %s\n", thisMap.c_str());
         loadLevel(levelFileName.str());
 
         //reset all the camera stuff
         //dirX = std::tan((hFOV*degToRad)/2);
-        dirX = std::sqrt(dirX*dirX+dirY*dirY); //preserve hfov. not sure why the other way isn't working
-        dirY = 0;        
+        //dirX = std::sqrt(dirX*dirX+dirY*dirY); //preserve hfov. not sure why the other way isn't working
+        double oldFOV = hFOV;
+        changeFOV(false, 90);
+        dirX = 1;
+        dirY = 0;
+        changeFOV(false, oldFOV);        
         planeX = 0;
         planeY = 1;
         vertLook = 0;
         vertHeight = 0;
         viewTrip = 0;
 
-        for(int y = 0; y < gscreenHeight; y++) //define a height table for floor and ceiling calculations later
-        {
-            floorDist[y] = (gscreenHeight+(2*vertHeight)) / ((2.0*(y-vertLook) - (gscreenHeight)));
-            ceilDist[y] = (gscreenHeight-(2*vertHeight)) / ((2.0*(y+vertLook) - (gscreenHeight)));
-        }
+        calcFloorDist();
+
         int tw, th;
         SDL_QueryTexture(gskyTex, NULL, NULL, &tw, &th);
         gskySrcRect.y = (int)std::round(((double)th/2.0 - (double)gskySrcRect.h/2.0) - ((double)vertLook * ((double)gskySrcRect.h/(double)gskyDestRect.h)));
@@ -1549,7 +1556,7 @@ void changeFOV(bool rel, double newFOV)
     {
         if((hFOV + newFOV >= 180) || (hFOV + newFOV < 45))
             return;
-        if(std::tan(hFOV+newFOV* degToRad) != 0)
+        if(std::tan((hFOV+newFOV) * degToRad) != 0)
         {
             double mult = std::tan((hFOV * degToRad)/2) / std::tan(((hFOV+newFOV) * degToRad)/2);
             hFOV += newFOV;
@@ -1559,7 +1566,7 @@ void changeFOV(bool rel, double newFOV)
     }
     else
     {
-        if(std::tan(newFOV* degToRad) != 0)
+        if(std::tan(newFOV * degToRad) != 0)
         {
             double mult = std::tan((hFOV * degToRad)/2) / std::tan(((newFOV) * degToRad)/2);
             hFOV = newFOV;
@@ -1567,4 +1574,14 @@ void changeFOV(bool rel, double newFOV)
             dirY *= mult;
         }
     }
+}
+
+void resizeWindow(bool letterbox)
+{
+    int newWidth = 0, newHeight = 0;
+    SDL_GetWindowSize(gwindow, &newWidth, &newHeight);
+    SDL_RenderSetLogicalSize(gRenderer, gscreenWidth, gscreenHeight);
+    SDL_RenderSetIntegerScale(gRenderer, SDL_bool(false));
+    float limitingSide = std::min((float)newWidth / gscreenWidth, (float)newHeight / gscreenHeight);
+    SDL_RenderSetScale(gRenderer, limitingSide, limitingSide);
 }

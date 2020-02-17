@@ -71,7 +71,7 @@ void initBlockTypes()
 }
 
 //change a map block's id and internal settings
-void changeBlock(Map_Block* blockIn, int newID)
+void changeBlock(Map_Block* blockIn, unsigned int newID)
 {
     if (newID < blockTypes.size())
     {
