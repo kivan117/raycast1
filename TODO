@@ -1,8 +1,8 @@
-Variable height walls
 Add objects with sprites
 Animate doors
-Transparent walls
 Mirrors / Portals
-Config file
+Config files for general settings
+config files for block data
 Make fog respect changes in FOV
-Fix height to be in world coordinates, not screen coordinates
+Fix floor & ceiling regressions
+fix slowdown from z buffer

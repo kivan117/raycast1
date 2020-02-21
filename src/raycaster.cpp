@@ -26,8 +26,8 @@ int mapHeight = 24;
 
 //really shitty way to set internal rendering dimensions.
 //TODO: stop hard coding screen dimensions. load from config file instead
-const int gscreenWidth =  960;//1920;//1280; //640; //720; //800; //960;
-const int gscreenHeight = 540;//1080;//720; //360; //405; //450; //540;
+const int gscreenWidth =  640;//1920;//1280; //640; //720; //800; //960;
+const int gscreenHeight = 360;//1080;//720; //360; //405; //450; //540;
 
 bool vertSyncOn = true;
 bool letterboxOn = true;
@@ -72,8 +72,6 @@ double vertSpeed = 0.1; //multiplier to control player's change in vertHeight (f
 
 bool sprinting = false;
 
-
-
 //player position and screen plane coordinates:
 //
 //posX, posY are player position in world coordinates. each "1" is a full world block
@@ -109,7 +107,7 @@ int blockRightX = 0, blockRightY = 0; //block furthest right that's on screen. u
 double mouseSense = 0.25; //horizontal mouse sensitivity multiplier
 double mouseVertSense = 0.75; //vertical mouse sensitivity multiplier
 
-//some numbers for frame time calculation. used for frame rate independence and performance calculations
+//some numbers for frame time calculation.
 Uint64 oldtime = 0;
 Uint64 gtime = 0;
 unsigned int framecounter = 0;
@@ -128,7 +126,7 @@ SDL_Texture *gfloorBuffer = NULL; //buffer texture. calculated perspective mappi
 SDL_Texture *gfogTex = NULL; //buffer texture. calculated fog will be plotted onto this texture
 SDL_Texture *weaponTex = NULL; //current player weapon (from first person perspective)
 
-const int totalWallTextures = 3; //number of unique wall textures. needs to be read from a config or dynamically calculated
+const int totalWallTextures = 4; //number of unique wall textures. needs to be read from a config or dynamically calculated
 
 SDL_Rect gskyDestRect; //used for skybox. where (on screen) to draw the skybox
 SDL_Rect gskySrcRect; //used for skybox. where (on skybox texture) to grab current skybox from
@@ -139,7 +137,24 @@ SDL_Rect weaponDestRect; //where (on screen) to draw weapon
 
 std::stringstream ssFPS; //string for window title. currently used for debug info (FPS, FOV, etc)
 
-std::vector<std::vector<Map_Block>> leveldata; //current map information as a 2d dynamic size array
+std::vector<std::vector<Map_Block>> leveldata; //current map information as a 2d dynamic size array of Map_Block structs
+                                               //as currently iplemented, each "block" is its own object, so you could toggle features/aspects individually
+                                               //we aren't yet using this aspect but might soon (door or opacity timers specific to one block for instance)
+                                               //but we could also just set this to an array of ints and do lookups by block id
+                                               //this would save space but each block would have to strictly adhere to its category
+
+
+struct Ray_Hit_Data {       //convenient struct to hold data for each raycast hit that matters
+    double distance = 0.0;
+    int side = 0;
+    int mapX = 0;
+    int mapY = 0;
+};
+
+std::vector<std::vector<Ray_Hit_Data>> rayHits; //get a vector of Ray_Hit_Data structs for each pixel across the screen
+int drawDepth[gscreenWidth];
+
+enum DIRECTIONS {DIR_FWD, DIR_BACK, DIR_LEFT, DIR_RIGHT}; //plan to use this to clarify input and movement code later. currently useless
 
 bool init(); //basic start-SDL stuff
 bool initWindow(); //get window and hardware accelerated (if possible) renderer
@@ -151,9 +166,9 @@ bool handleInput(); //react to player input.
 void updateScreen(); //draw stuff
 void calcRaycast(); //calculate all raytracing. calls draw world when it's done
 void calcFloorDist();
-void drawWorldGeoFlat(double* wallDist, int* side, int* mapX, int* mapY); //draw world with debug colors
-void drawWorldGeoTex(double* wallDist, int* side, int* mapX, int* mapY); //draw world with textures
-void drawFloor(double* wallDist, int* drawStart, int* drawEnd, int* side, int* mapX, int* mapY); //calculate and draw perspective floor and ceiling
+void drawWorldGeoFlat(); //draw world with debug colors
+void drawWorldGeoTex(); //draw world with textures
+void drawFloor(double* wallDist, int* drawStart, int* drawEnd); //calculate and draw perspective floor and ceiling
 void drawMiniMap(); //draw little debug color minimap
 void drawSkyBox(); //paste a skybox
 void close(); //prepare to quit game
@@ -315,7 +330,7 @@ bool initTextures()
     {
         texFileName.str(std::string());
         texFileName << "resources" << PATH_SYM << "textures" << PATH_SYM << "wall" << i << ".bmp";
-        gwallTex[i] = loadImage(texFileName.str());
+        gwallTex[i] = loadImageColorKey(texFileName.str(), cMagenta);
         if (gwallTex[i] == NULL)
         {
             success = false;
@@ -552,6 +567,11 @@ bool handleInput()
                         case SDLK_F11:
                         {
                             debugColors = !(debugColors);
+                            if(debugColors)
+                            {
+                                gfloorRect.y = gscreenHeight / 2 + vertLook;
+                                gfloorRect.h = gscreenHeight - gfloorRect.y;
+                            }
                             break;
                         }
                         case SDLK_F12:
@@ -667,43 +687,89 @@ bool handleInput()
     {
         // the 0.3 is to try to prevent the player from normally being right up on the wall and clipping through it on corners
         // they still CAN, but they have to on purpose essentially
-        if (leveldata[int(posX + xComponent * (0.3))][int(posY)].solid == false)
-            if (leveldata[int(posX + xComponent * moveSpeed)][int(posY)].solid == false)
-                posX += (xComponent) * moveSpeed;
-        if (leveldata[int(posX)][int(posY + yComponent * (0.3))].solid == false)
-            if (leveldata[int(posX)][int(posY + yComponent * moveSpeed)].solid == false)
-                posY += yComponent * moveSpeed;
+        // if (leveldata[int(posX + xComponent * (0.3))][int(posY)].solid == false)
+        //     if (leveldata[int(posX + xComponent * moveSpeed)][int(posY)].solid == false)
+        //         posX += (xComponent) * moveSpeed;
+        // if (leveldata[int(posX)][int(posY + yComponent * (0.3))].solid == false)
+        //     if (leveldata[int(posX)][int(posY + yComponent * moveSpeed)].solid == false)
+        //         posY += yComponent * moveSpeed;
+        int testX1 = std::max(0, std::min(mapWidth - 1, int(posX + xComponent * (0.3))));
+        int testX2 = std::max(0, std::min(mapWidth - 1, int(posX + xComponent * moveSpeed)));
+        int testY1 = std::max(0, std::min(mapHeight - 1, int(posY + yComponent * (0.3))));
+        int testY2 = std::max(0, std::min(mapHeight - 1, int(posY + yComponent * moveSpeed)));
+        if ((leveldata[testX1][int(posY)].solid || leveldata[testX2][int(posY)].solid) == false)
+        {
+            posX += (xComponent) * moveSpeed;
+            posX = std::max(1.3, std::min(((double)mapWidth - 1.3), posX));
+        }
+        if ((leveldata[int(posX)][testY1].solid || leveldata[int(posX)][testY2].solid) == false)
+        {
+            posY += yComponent * moveSpeed;
+            posY = std::max(1.3, std::min(((double)mapHeight - 1.3), posY));
+        }
+
+
     }
     if (currentKeyStates[SDL_SCANCODE_S] || currentKeyStates[SDL_SCANCODE_DOWN]) //move backward
     {
-        if (leveldata[int(posX - xComponent * (0.3))][int(posY)].solid == false)
-            if (leveldata[int(posX - xComponent * moveSpeed)][int(posY)].solid == false)
-                posX -= xComponent * moveSpeed;
-        if (leveldata[int(posX)][int(posY - yComponent * (0.3))].solid == false)
-            if (leveldata[int(posX)][int(posY - yComponent * moveSpeed)].solid == false)
-                posY -= yComponent * moveSpeed;
+        // if (leveldata[int(posX - xComponent * (0.3))][int(posY)].solid == false)
+        //     if (leveldata[int(posX - xComponent * moveSpeed)][int(posY)].solid == false)
+        //         posX -= xComponent * moveSpeed;
+        // if (leveldata[int(posX)][int(posY - yComponent * (0.3))].solid == false)
+        //     if (leveldata[int(posX)][int(posY - yComponent * moveSpeed)].solid == false)
+        //         posY -= yComponent * moveSpeed;
+        int testX1 = std::max(0, std::min(mapWidth - 1, int(posX - xComponent * (0.3))));
+        int testX2 = std::max(0, std::min(mapWidth - 1, int(posX - xComponent * moveSpeed)));
+        int testY1 = std::max(0, std::min(mapHeight - 1, int(posY - yComponent * (0.3))));
+        int testY2 = std::max(0, std::min(mapHeight - 1, int(posY - yComponent * moveSpeed)));
+        if ((leveldata[testX1][int(posY)].solid || leveldata[testX2][int(posY)].solid) == false)
+        {
+            posX -= (xComponent) * moveSpeed;
+            posX = std::max(1.3, std::min(((double)mapWidth - 1.3), posX));
+        }
+        if ((leveldata[int(posX)][testY1].solid || leveldata[int(posX)][testY2].solid) == false)
+        {
+            posY -= yComponent * moveSpeed;
+            posY = std::max(1.3, std::min(((double)mapHeight - 1.3), posY));
+        }
     }
     if (currentKeyStates[SDL_SCANCODE_A] || currentKeyStates[SDL_SCANCODE_LEFT]) //strafe left
     {
         // the 0.3 is to try to prevent the player from normally being right up on the wall and clipping through it on corners
         // they still CAN, but they have to on purpose essentially
-        if (leveldata[int(posX - planeX * (0.3))][int(posY)].solid == false)
-            if (leveldata[int(posX - planeX * moveSpeed)][int(posY)].solid == false)
-                posX -= planeX * (moveSpeed);
-        if (leveldata[int(posX)][int(posY - planeY * (0.3))].solid == false)
-            if (leveldata[int(posX)][int(posY - planeY * moveSpeed)].solid == false)
-                posY -= planeY * (moveSpeed);
+        int testX1 = std::max(0, std::min(mapWidth - 1, int(posX - planeX * (0.3))));
+        int testX2 = std::max(0, std::min(mapWidth - 1, int(posX - planeX * moveSpeed)));
+        int testY1 = std::max(0, std::min(mapHeight - 1, int(posY - planeY * (0.3))));
+        int testY2 = std::max(0, std::min(mapHeight - 1, int(posY - planeY * moveSpeed)));
+        if ((leveldata[testX1][int(posY)].solid || leveldata[testX2][int(posY)].solid) == false)
+        {
+            posX -= planeX * (moveSpeed);
+            posX = std::max(1.3, std::min(((double)mapWidth - 1.3), posX));
+        }
+        if ((leveldata[int(posX)][testY1].solid || leveldata[int(posX)][testY2].solid) == false)
+        {
+            posY -= planeY * (moveSpeed);
+            posY = std::max(1.3, std::min(((double)mapHeight - 1.3), posY));
+        }
     }
     if (currentKeyStates[SDL_SCANCODE_D] || currentKeyStates[SDL_SCANCODE_RIGHT]) //strafe right
     {
         // the 0.3 is to try to prevent the player from normally being right up on the wall and clipping through it on corners
         // they still CAN, but they have to on purpose essentially
-        if (leveldata[int(posX + planeX * (0.3))][int(posY)].solid == false)
-            if (leveldata[int(posX + planeX * moveSpeed)][int(posY)].solid == false)
-                posX += planeX * moveSpeed;
-        if (leveldata[int(posX)][int(posY + planeY * (0.3))].solid == false)
-            if (leveldata[int(posX)][int(posY + planeY * moveSpeed)].solid == false)
-                posY += planeY * moveSpeed;
+        int testX1 = std::max(0, std::min(mapWidth - 1, int(posX + planeX * (0.3))));
+        int testX2 = std::max(0, std::min(mapWidth - 1, int(posX + planeX * moveSpeed)));
+        int testY1 = std::max(0, std::min(mapHeight - 1, int(posY + planeY * (0.3))));
+        int testY2 = std::max(0, std::min(mapHeight - 1, int(posY + planeY * moveSpeed)));
+        if ((leveldata[testX1][int(posY)].solid || leveldata[testX2][int(posY)].solid) == false)
+        {
+            posX += planeX * (moveSpeed);
+            posX = std::max(1.3, std::min(((double)mapWidth - 1.3), posX));
+        }
+        if ((leveldata[int(posX)][testY1].solid || leveldata[int(posX)][testY2].solid) == false)
+        {
+            posY += planeY * (moveSpeed);
+            posY = std::max(1.3, std::min(((double)mapHeight - 1.3), posY));
+        }
     }
     if ((currentKeyStates[SDL_SCANCODE_Q] || mouseXDist < 0)&&currentKeyStates[SDL_SCANCODE_E]==false) //turn left
     {
@@ -754,132 +820,173 @@ void updateScreen()
 void calcRaycast()
 {
     //buffers to hold some results from raycasting for each x across screen
-    double wallDist[gscreenWidth]; //dist to nearest wall
-    int side[gscreenWidth];    //was a NS or a EW wall hit?
-    int mapX[gscreenWidth];    //the x value on map of wall hit
-    int mapY[gscreenWidth];    //the y value on map of wall hit
+    // double wallDist[gscreenWidth]; //dist to nearest wall
+    // int side[gscreenWidth];    //was a NS or a EW wall hit?
+    // int mapX[gscreenWidth];    //the x value on map of wall hit
+    // int mapY[gscreenWidth];    //the y value on map of wall hit
+
 
     double cameraX, rayDirX, rayDirY, sideDistX, sideDistY, deltaDistX = 0, deltaDistY = 0, perpWallDist;
     int stepX, stepY, hit;    
     
     //ACTUAL RAYCAST LOGIC
-    for (int x = 0; x < gscreenWidth; x++)
+    if(!rayHits.empty())
     {
+        int x = 0;
+        int z = 0;
+        bool stopRayCalc = false;
+        int highestWall = gscreenHeight;
+        for (auto it = rayHits.begin(); it != rayHits.end(); ++it)
+        {
+            //it->push_back(Ray_Hit_Data()); //add first collision data struct to the vector 
 
-        //calculate ray position and direction
-        cameraX = 2 * x / double(gscreenWidth) - 1; //x-coordinate in camera space, or along the x of the camera plane itself
-                                                    //cameraX ranges from -1 to 1, with 0 being center of camera screen
-        
-        rayDirX = dirX + planeX * cameraX; //the XY coord where the vector of this ray crosses the camera plane
-        rayDirY = dirY + planeY * cameraX; //
-        //which box of the map we're in
-        mapX[x] = int(posX);
-        mapY[x] = int(posY);
+            stopRayCalc = false;
+            highestWall = gscreenHeight;
+            z = 0;
+            drawDepth[x] = 0;
+            cameraX = 2 * x / double(gscreenWidth) - 1; //x-coordinate in camera space, or along the x of the camera plane itself
+                                                            //cameraX ranges from -1 to 1, with 0 being center of camera screen
 
 
-        //length of ray from one x or y-side to next x or y-side
-        if(rayDirX != 0)
-        {
-            deltaDistX = std::abs(1 / rayDirX); //the x component of a vector in the player's viewing direction that spans exactly across 1 map block side to side
-        }
-        
-        
-        if(rayDirY != 0)
-        {
-            deltaDistY = std::abs(1 / rayDirY); //y component of that vector
-        }
-        
-
-        //calculate step and initial sideDist
-        if (rayDirX < 0)
-        {
-            stepX = -1; //facing left, step left (decrement) through map matrix x
-            sideDistX = (posX - mapX[x]) * deltaDistX; // x component of viewing distance vector to nearest wall
-                                                    //calculated by getting our fractional perpendicular offset from the closest wall, times the x component 
-                                                    //of the length of the vector in our viewing direction that spans exactly 1 whole map block side-to-side
-        }
-        else
-        {
-            stepX = 1; //step right (increment) through map matrix x
-            sideDistX = (mapX[x] + 1.0 - posX) * deltaDistX; // x component of distance vector to nearest wall
-        }
-        if (rayDirY < 0)
-        {
-            stepY = -1; //facing up, step up (decrement) through map matrix y
-            sideDistY = (posY - mapY[x]) * deltaDistY; //y component of distance vector to nearest wall
-        }
-        else
-        {
-            stepY = 1; //facing down, step down (increment) through map matrix y
-            sideDistY = (mapY[x] + 1.0 - posY) * deltaDistY; //y component of distance to nearest wall
-        }
-
-        hit = 0; //was there a wall hit?
-
-        //perform DDA
-        while (hit == 0)
-        {
-            //jump to next map square in x-direction, OR in y-direction
-            if (sideDistX < sideDistY)
+            //calculate ray start position and direction    
+            rayDirX = dirX + planeX * cameraX; //the XY coord where the vector of this ray crosses the camera plane
+            rayDirY = dirY + planeY * cameraX;
+            //which box of the map we're in
+            rayHits[x][z].mapX = int(posX);
+            rayHits[x][z].mapY = int(posY);
+            //length of ray from one x or y-side to next x or y-side
+            if(rayDirX != 0)
             {
-                sideDistX += deltaDistX;
-                mapX[x] += stepX;
-                side[x] = 0;
+                deltaDistX = std::abs(1 / rayDirX); //the x component of a vector in the player's viewing direction that spans exactly across 1 map block side to side
+            }
+            
+            
+            if(rayDirY != 0)
+            {
+                deltaDistY = std::abs(1 / rayDirY); //y component of that vector
+            }
+            //calculate step and initial sideDist
+            if (rayDirX < 0)
+            {
+                stepX = -1; //facing left, step left (decrement) through map matrix x
+                sideDistX = (posX - rayHits[x][z].mapX) * deltaDistX; // x component of viewing distance vector to nearest wall
+                                                        //calculated by getting our fractional perpendicular offset from the closest wall, times the x component 
+                                                        //of the length of the vector in our viewing direction that spans exactly 1 whole map block side-to-side
             }
             else
             {
-                sideDistY += deltaDistY;
-                mapY[x] += stepY;
-                side[x] = 1;
+                stepX = 1; //step right (increment) through map matrix x
+                sideDistX = (rayHits[x][z].mapX + 1.0 - posX) * deltaDistX; // x component of distance vector to nearest wall
             }
-            //Check if ray has hit a wall
-            if (leveldata[mapX[x]][mapY[x]].visible)
-                hit = 1;
-        }
-        
-
-        //Calculate distance to wall projected on camera direction (Euclidean distance will give fisheye effect!)
-        if (side[x] == 0)
-        {
-            perpWallDist = (mapX[x] - posX + (1 - stepX) / 2) / rayDirX;
-        }
-        else
-        {
-            perpWallDist = (mapY[x] - posY + (1 - stepY) / 2) / rayDirY;
-        }
-
-        wallDist[x] = perpWallDist; //fill wall distance buffer
-
-        //store location and distance of wall straight ahead of player
-        if(x == gscreenWidth / 2)
-        {
-            if (side[x] == 0)
+            if (rayDirY < 0)
             {
-                blockAheadDist = std::abs(perpWallDist * rayDirX);
+                stepY = -1; //facing up, step up (decrement) through map matrix y
+                sideDistY = (posY - rayHits[x][z].mapY) * deltaDistY; //y component of distance vector to nearest wall
             }
             else
             {
-                blockAheadDist = std::abs(perpWallDist * rayDirY);
-            }            
-            blockAheadX = mapX[x];
-            blockAheadY = mapY[x];
-        }
-        else if(x == 0) //store location of block that's in our leftmost periphery
-        {        
-            blockLeftX = mapX[x];
-            blockLeftY = mapY[x];
-        }
-        else if(x == gscreenWidth -1) //store location of block that's in our rightmost periphery
-        {        
-            blockRightX = mapX[x];
-            blockRightY = mapY[x];
-        }
+                stepY = 1; //facing down, step down (increment) through map matrix y
+                sideDistY = (rayHits[x][z].mapY + 1.0 - posY) * deltaDistY; //y component of distance to nearest wall
+            }
+            while(stopRayCalc == false)
+            {
+                hit = 0; //was there a wall hit?
 
+                //perform DDA
+                while (hit == 0)
+                {
+                    //jump to next map square in x-direction, OR in y-direction
+                    if (sideDistX < sideDistY)
+                    {
+                        sideDistX += deltaDistX;
+                        rayHits[x][z].mapX += stepX;
+                        rayHits[x][z].side = 0;
+                        if(rayHits[x][z].mapX == 0 || rayHits[x][z].mapX == mapWidth - 1)
+                            hit = 1;
+                    }
+                    else
+                    {
+                        sideDistY += deltaDistY;
+                        rayHits[x][z].mapY += stepY;
+                        rayHits[x][z].side = 1;
+                        if(rayHits[x][z].mapY == 0 || rayHits[x][z].mapY == mapHeight - 1)
+                            hit = 1;
+                    }
+                    //Check if ray has hit a visible (or the end of the map)
+                    if (leveldata[rayHits[x][z].mapX][rayHits[x][z].mapY].visible)
+                        hit = 1;
+                }
+
+                //we've hit something visible
+                
+                //Calculate distance to wall (projected on camera plane)
+                if (rayHits[x][z].side == 0)
+                {
+                    perpWallDist = (rayHits[x][z].mapX - posX + (1 - stepX) / 2) / rayDirX;
+                }
+                else
+                {
+                    perpWallDist = (rayHits[x][z].mapY - posY + (1 - stepY) / 2) / rayDirY;
+                }
+
+                rayHits[x][z].distance = perpWallDist; //fill wall distance buffer
+                int lineHeight = (int)((double)gscreenHeight * vFOV / perpWallDist);
+                int drawEnd = (lineHeight / 2) + (gscreenHeight / 2) + ((vertHeight*gscreenHeight) / perpWallDist) + vertLook;
+                //calculate lowest and highest pixel to fill in current stripe
+                int drawStart = drawEnd - lineHeight*(leveldata[rayHits[x][z].mapX][rayHits[x][z].mapY].height);
+                if(leveldata[rayHits[x][z].mapX][rayHits[x][z].mapY].transparent == false)
+                    highestWall = std::min(highestWall, drawStart);
+
+
+                //store location and distance of wall straight ahead of player
+                if(x == gscreenWidth / 2 && z == 0)
+                {
+                    if (rayHits[x][z].side == 0)
+                    {
+                        blockAheadDist = std::abs(perpWallDist * rayDirX);
+                    }
+                    else
+                    {
+                        blockAheadDist = std::abs(perpWallDist * rayDirY);
+                    }            
+                    blockAheadX = rayHits[x][z].mapX;
+                    blockAheadY = rayHits[x][z].mapY;
+                }
+                else if(x == 0 && z == 0) //store location of block that's in our leftmost periphery
+                {        
+                    blockLeftX = rayHits[x][z].mapX;
+                    blockLeftY = rayHits[x][z].mapY;
+                }
+                else if(x == gscreenWidth -1 && z == 0) //store location of block that's in our rightmost periphery
+                {        
+                    blockRightX = rayHits[x][z].mapX;
+                    blockRightY = rayHits[x][z].mapY;
+                }
+                //stop if we hit a map edge
+                if(rayHits[x][z].mapX == 0 || rayHits[x][z].mapY == 0 || rayHits[x][z].mapX == mapWidth - 1 || rayHits[x][z].mapY == mapHeight - 1)
+                {
+                    stopRayCalc = true;
+                }
+                else if(highestWall <= 0)
+                {
+                    stopRayCalc = true;
+                }
+                else if(drawStart <= highestWall) //this wall visible, save its data
+                {
+                    //it->push_back(Ray_Hit_Data()); //add a collision data struct to the vector
+                    ++z; //increase our z counter
+                    rayHits[x][z].mapX = rayHits[x][z-1].mapX; //set the starting position of the ray to where we left off
+                    rayHits[x][z].mapY = rayHits[x][z-1].mapY;
+                }
+            }
+            drawDepth[x] = z;
+            ++x;
+        }
     }
     if(debugColors)
-        drawWorldGeoFlat(wallDist, side, mapX, mapY);
+        drawWorldGeoFlat();
     else
-        drawWorldGeoTex(wallDist, side, mapX, mapY);
+        drawWorldGeoTex();
 }
 
 void calcFloorDist()
@@ -891,7 +998,7 @@ void calcFloorDist()
         }
 }
 
-void drawWorldGeoFlat(double* wallDist, int* side, int* mapX, int* mapY)
+void drawWorldGeoFlat()
 {
     //draw sky
     SDL_SetRenderDrawColor(gRenderer, 0x7f, 0xaa, 0xff, 0xff);
@@ -900,153 +1007,189 @@ void drawWorldGeoFlat(double* wallDist, int* side, int* mapX, int* mapY)
     SDL_SetRenderDrawColor(gRenderer, 0x7f, 0x7f, 0x7f, 0xff);
     SDL_RenderFillRect(gRenderer, &gfloorRect);
     int lineHeight, drawStart, drawEnd;
-    for (int x = 0; x < gscreenWidth; x++)
+
+    int x = 0;
+    for (auto it = rayHits.begin(); it != rayHits.end(); ++it)
+    {
+        for(auto i = drawDepth[x]; i >= 0; --i)
         {
-        lineHeight = (int)(gscreenHeight * vFOV / wallDist[x]);
-        //calculate lowest and highest pixel to fill in current stripe
-        drawStart = -lineHeight / 2 + gscreenHeight / 2;
-        drawEnd = lineHeight / 2 + gscreenHeight / 2;
-        //choose wall color
-        SDL_Color color;
-        //give x and y sides different brightness
-        if (side[x] == 0)
-        {
-            switch (leveldata[mapX[x]][mapY[x]].block_id)
+            auto current_hit = it->at(i);
+            //choose wall color
+            SDL_Color color;
+            //give x and y sides different brightness
+            if (current_hit.side == 0)
             {
-            case 1:
-                color = cBlue;
-                break;
-            case 2:
-                color = cGreen;
-                break;
-            case 3:
-                color = cRed;
-                break;
-            case 4:
-                color = cWhite;
-                break;
-            default:
-                color = cYellow;
-                break;
+                switch (leveldata[current_hit.mapX][current_hit.mapY].block_id)
+                {
+                case 1:
+                    color = cBlue;
+                    break;
+                case 2:
+                    color = cGreen;
+                    break;
+                case 3:
+                    color = cRed;
+                    break;
+                case 4:
+                    color = cWhite;
+                    break;
+                default:
+                    color = cYellow;
+                    break;
+                }
             }
-        }
-        else
-        {
-            switch (leveldata[mapX[x]][mapY[x]].block_id)
+            else
             {
-            case 1:
-                color = cBlue;
-                break;
-            case 2:
-                color = cGreen;
-                break;
-            case 3:
-                color = cRed;
-                break;
-            case 4:
-                color = cWhite;
-                break;
-            default:
-                color = cYellow;
-                break;
+                switch (leveldata[current_hit.mapX][current_hit.mapY].block_id)
+                {
+                case 1:
+                    color = cBlue;
+                    break;
+                case 2:
+                    color = cGreen;
+                    break;
+                case 3:
+                    color = cRed;
+                    break;
+                case 4:
+                    color = cWhite;
+                    break;
+                default:
+                    color = cYellow;
+                    break;
+                }
+                color.r = color.r * 0.5;
+                color.g = color.g * 0.5;
+                color.b = color.b * 0.5;
+                color.a = color.a * 0.5;
             }
-            color.r = color.r * 0.5;
-            color.g = color.g * 0.5;
-            color.b = color.b * 0.5;
-            color.a = color.a * 0.5;
+
+            lineHeight = (int)((double)gscreenHeight * vFOV / current_hit.distance);
+            drawEnd = (lineHeight / 2) + (gscreenHeight / 2) + ((vertHeight*gscreenHeight) / current_hit.distance) + vertLook;
+            //calculate lowest and highest pixel to fill in current stripe
+            drawStart = drawEnd - lineHeight*(leveldata[current_hit.mapX][current_hit.mapY].height);
+
+            //render vertical lines for raycast based on calculations
+            if(leveldata[current_hit.mapX][current_hit.mapY].transparent)
+            {
+                color.a = leveldata[current_hit.mapX][current_hit.mapY].alphaMod;
+            }
+            else
+            {
+                color.a = 255;
+            }
+            SDL_SetRenderDrawColor(gRenderer, color.r, color.g, color.b, color.a);
+            SDL_RenderDrawLine(gRenderer, x, drawStart, x, drawEnd);
         }
-
-        //calculate lowest and highest pixel to fill in current stripe
-        drawStart = -(lineHeight / 2) + (gscreenHeight / 2) + ((vertHeight*gscreenHeight) / wallDist[x]) + vertLook;
-        if (drawStart < 0)
-            drawStart = 0;
-        drawEnd = (lineHeight / 2) + (gscreenHeight / 2) + ((vertHeight*gscreenHeight) / wallDist[x]) + vertLook;
-        if (drawEnd >= gscreenHeight)
-            drawEnd = gscreenHeight - 1;
-
-        //render vertical lines for raycast based on calculations
-
-        SDL_SetRenderDrawColor(gRenderer, color.r, color.g, color.b, color.a);
-        SDL_RenderDrawLine(gRenderer, x, drawStart, x, drawEnd);
+        
+        ++x;
     }
 }
 
-void drawWorldGeoTex(double* wallDist, int* side, int* mapX, int* mapY)
+void drawWorldGeoTex()
 {
     if(ceilingOn == false)
     {
         drawSkyBox();
     }
     double cameraX, rayDirX, rayDirY, wallX, brightness;
+    double floorHitDist[gscreenWidth];
     int lineHeight, texX;
-    int drawStart[gscreenWidth], drawEnd[gscreenWidth];
+    int drawStart, drawEnd;
+    int highestStart[gscreenWidth], lowestEnd[gscreenWidth];
     int currTexWidth, currTexHeight;
-    
-    for (int x = 0; x < gscreenWidth; x++)
+    int x = 0;
+    for (auto it = rayHits.begin(); it != rayHits.end(); ++it)
     {
-        cameraX = 2 * x / double(gscreenWidth) - 1; //x-coordinate in camera space, or along the x of the camera plane itself
-        rayDirX = dirX + planeX * cameraX; //the XY coord where the vector of this ray crosses the camera plane
-        rayDirY = dirY + planeY * cameraX;
-        //Calculate height of line to draw on screen
-        lineHeight = (int)(gscreenHeight * vFOV / wallDist[x]);
-        int currentWall = 0;
-        if (side[x] == 1 && rayDirY > 0) //NORTH WALL
-            currentWall = NORTH;
-        else if (side[x] == 1 && rayDirY < 0) //SOUTH WALL
-            currentWall = SOUTH;
-        else if (side[x] == 0 && rayDirX < 0) //EAST WALL
-            currentWall = EAST;
-        else //WEST WALL??
-            currentWall = WEST;
-
-        if(leveldata[mapX[x]][mapY[x]].wallTex[currentWall] < totalWallTextures)
+        highestStart[x] = gscreenHeight;
+        lowestEnd[x] = 0;
+        for(auto i = drawDepth[x]; i>=0; --i)
         {
-            gcurrTex = gwallTex[leveldata[mapX[x]][mapY[x]].wallTex[currentWall]];
+            auto current_hit = it->at(i);
+            cameraX = 2 * x / double(gscreenWidth) - 1; //x-coordinate in camera space, or along the x of the camera plane itself
+            rayDirX = dirX + planeX * cameraX; //the XY coord where the vector of this ray crosses the camera plane
+            rayDirY = dirY + planeY * cameraX;
+            //Calculate height of line to draw on screen
+            
+            int currentWall = 0;
+            if (current_hit.side == 1 && rayDirY > 0) //NORTH WALL
+                currentWall = NORTH;
+            else if (current_hit.side == 1 && rayDirY < 0) //SOUTH WALL
+                currentWall = SOUTH;
+            else if (current_hit.side == 0 && rayDirX < 0) //EAST WALL
+                currentWall = EAST;
+            else //WEST WALL??
+                currentWall = WEST;
+
+            if(leveldata[current_hit.mapX][current_hit.mapY].wallTex[currentWall] < totalWallTextures)
+            {
+                gcurrTex = gwallTex[leveldata[current_hit.mapX][current_hit.mapY].wallTex[currentWall]]; //set correct wall texture
+            }
+            else
+            {
+                gcurrTex = gwallTex[0]; //default to texture 0
+            }
+            SDL_QueryTexture(gcurrTex, NULL, NULL, &currTexWidth, &currTexHeight);        
+
+            //calculate value of wallX
+            if (current_hit.side == 0)
+                wallX = posY + current_hit.distance * rayDirY; //if we hit a NS wall, use y pos, + perpendicular value * y component of vector to get total y offset
+            else
+                wallX = posX + current_hit.distance * rayDirX; //as above, but x value for EW walls
+            wallX -= floor((wallX));                   //subtract away the digits to the left of the decimal point, leaving only the fractional value across the single wall
+
+            //x coordinate on the texture
+            texX = int(wallX * double(currTexWidth)); //determine exact value across the wall texture in pixels
+            if (current_hit.side == 0 && rayDirX < 0)
+                texX = currTexWidth - texX - 1; //horizontally flip textures so they're drawn properly depending on the side of the cube they're on
+            if (current_hit.side == 1 && rayDirY > 0)
+                texX = currTexWidth - texX - 1;
+
+            //calculate lowest and highest pixel to fill in current stripe
+            //drawStart[x] = -lineHeight / 2 + (gscreenHeight / 2) + ((vertHeight*gscreenHeight) / wallDist[x]) + vertLook;
+            lineHeight = (int)(gscreenHeight * vFOV / current_hit.distance);
+            drawEnd = lineHeight / 2 + (gscreenHeight / 2) + ((vertHeight*gscreenHeight) / current_hit.distance) + vertLook;
+            drawStart = drawEnd - 2.0*((double)lineHeight/2.0)*(leveldata[current_hit.mapX][current_hit.mapY].height);
+            if(lowestEnd[x] < drawEnd)
+            {
+                floorHitDist[x] = current_hit.distance;
+                lowestEnd[x] = drawEnd;
+            }
+            if(highestStart[x] > drawStart)
+            {
+                highestStart[x] = drawStart;
+            }
+                     
+            // set up the rectangle to sample the texture for the wall
+            SDL_Rect line = {x, drawStart, 1, drawEnd - drawStart};
+            SDL_Rect sample = {texX, 0, 1, currTexHeight};
+
+            //use color mod to darken the wall texture
+            //255 = no color mod, lower values mean darker
+            //currently setup so that NS walls are full brightness, and EW walls are darkened
+            if(current_hit.side == 0)
+                brightness = 255.0;
+            else
+                brightness = 127.0;
+
+            SDL_SetTextureColorMod(gcurrTex, brightness, brightness, brightness);
+            if(leveldata[current_hit.mapX][current_hit.mapY].transparent)
+            {
+                SDL_SetTextureAlphaMod(gcurrTex, leveldata[current_hit.mapX][current_hit.mapY].alphaMod);
+            }
+            else
+            {
+                SDL_SetTextureAlphaMod(gcurrTex, 255);
+            }
+            
+            renderTexture(gcurrTex, gRenderer, line, &sample);
         }
-        else
-        {
-            gcurrTex = gwallTex[0];
-        }
-        SDL_QueryTexture(gcurrTex, NULL, NULL, &currTexWidth, &currTexHeight);        
-
-        //calculate value of wallX
-        if (side[x] == 0)
-            wallX = posY + wallDist[x] * rayDirY; //if we hit a NS wall, use y pos, + perpendicular value * y component of vector to get total y offset
-        else
-            wallX = posX + wallDist[x] * rayDirX; //as above, but x value for EW walls
-        wallX -= floor((wallX));                   //subtract away the digits to the left of the decimal point, leaving only the fractional value across the single wall
-
-        //x coordinate on the texture
-        texX = int(wallX * double(currTexWidth)); //determine exact value across the wall texture in pixels
-        if (side[x] == 0 && rayDirX < 0)
-            texX = currTexWidth - texX - 1; //horizontally flip textures so they're drawn properly depending on the side of the cube they're on
-        if (side[x] == 1 && rayDirY > 0)
-            texX = currTexWidth - texX - 1;
-
-        //calculate lowest and highest pixel to fill in current stripe
-        drawStart[x] = -lineHeight / 2 + (gscreenHeight / 2) + ((vertHeight*gscreenHeight) / wallDist[x]) + vertLook;
-        drawEnd[x] = lineHeight / 2 + (gscreenHeight / 2) + ((vertHeight*gscreenHeight) / wallDist[x]) + vertLook;
-
-        // set up the rectangle to sample the texture for the wall
-        SDL_Rect line = {x, drawStart[x], 1, drawEnd[x] - drawStart[x]};
-        SDL_Rect sample = {texX, 0, 1, currTexHeight};
-
-        //use color mod to darken the wall texture
-        //255 = no color mod, lower values mean darker
-        //currently setup so that NS walls are full brightness, and EW walls are darkened
-        if(side[x] == 0)
-            brightness = 255.0;
-        else
-            brightness = 127.0;
-
-        SDL_SetTextureColorMod(gcurrTex, brightness, brightness, brightness);
-        renderTexture(gcurrTex, gRenderer, line, &sample);   
+        ++x;   
     }
-
-    drawFloor(wallDist, drawStart, drawEnd, side, mapX, mapY);
+    drawFloor(floorHitDist, highestStart, lowestEnd);
 }
 
-void drawFloor(double* wallDist, int* drawStart, int* drawEnd, int* side, int* mapX, int* mapY)
+void drawFloor(double* wallDist, int* drawStart, int* drawEnd)
 {
     //create some pointers to later access the pixels in the floor and buffer textures
     void *floorBufferPixels, *floorTexPixels, *ceilTexPixels;
@@ -1073,32 +1216,32 @@ void drawFloor(double* wallDist, int* drawStart, int* drawEnd, int* side, int* m
         rayDirX = dirX + planeX * cameraX; //the XY coord where the vector of this ray crosses the camera plane
         rayDirY = dirY + planeY * cameraX;
         //calculate value of wallX
-        if (side[x] == 0)
+        if (rayHits[x][0].side == 0)
             wallX = posY + wallDist[x] * rayDirY; //if we hit a NS wall, use y pos, + perpendicular value * y component of vector to get total y offset
         else
             wallX = posX + wallDist[x] * rayDirX; //as above, but x value for EW walls
         wallX -= floor((wallX)); 
 
         //4 different wall directions possible
-        if (side[x] == 0 && rayDirX > 0)
+        if (rayHits[x][0].side == 0 && rayDirX > 0)
         {
-            floorXWall = mapX[x];
-            floorYWall = mapY[x] + wallX;
+            floorXWall = rayHits[x][0].mapX;
+            floorYWall = rayHits[x][0].mapY + wallX;
         }
-        else if (side[x] == 0 && rayDirX < 0)
+        else if (rayHits[x][0].side == 0 && rayDirX < 0)
         {
-            floorXWall = mapX[x] + 1.0;
-            floorYWall = mapY[x] + wallX;
+            floorXWall = rayHits[x][0].mapX + 1.0;
+            floorYWall = rayHits[x][0].mapY + wallX;
         }
-        else if (side[x] == 1 && rayDirY > 0)
+        else if (rayHits[x][0].side == 1 && rayDirY > 0)
         {
-            floorXWall = mapX[x] + wallX;
-            floorYWall = mapY[x];
+            floorXWall = rayHits[x][0].mapX + wallX;
+            floorYWall = rayHits[x][0].mapY;
         }
         else
         {
-            floorXWall = mapX[x] + wallX;
-            floorYWall = mapY[x] + 1.0;
+            floorXWall = rayHits[x][0].mapX + wallX;
+            floorYWall = rayHits[x][0].mapY + 1.0;
         }
 
         distPlayer = viewTrip;
@@ -1220,8 +1363,10 @@ void close()
     //destroy renderer
     SDL_DestroyTexture(gskyTex);
     //SDL_DestroyTexture(gDoorTex);
-    SDL_DestroyTexture(gwallTex[0]);
-    SDL_DestroyTexture(gwallTex[1]);
+    for(int i = 0; i < totalWallTextures; i++)
+    {
+        SDL_DestroyTexture(gwallTex[i]);
+    }
     SDL_DestroyTexture(gfloorTex);
     SDL_DestroyTexture(gceilTex);
     SDL_DestroyTexture(weaponTex);
@@ -1545,6 +1690,12 @@ void loadLevel(std::string path)
             mapFile >> a;
             changeBlock(&leveldata.at(x).at(y), a);
         }
+    }
+
+    rayHits.resize(gscreenWidth);
+    for(auto it = rayHits.begin(); it != rayHits.end(); ++it)
+    {
+        it->resize(mapWidth+mapHeight);
     }
 
     mapFile.close();
