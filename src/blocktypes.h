@@ -1,3 +1,4 @@
+#ifndef BLOCKTYPES_H
 #include <vector>
 
 const int totalBlocks = 64;
@@ -105,3 +106,4 @@ void changeBlock(Map_Block* blockIn, unsigned int newID)
     }
     return;
 }
+#endif

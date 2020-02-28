@@ -1,8 +1,4 @@
-Variable height walls
-Add objects with sprites
-Animate doors
-Transparent walls
 Mirrors / Portals
 Config file
-Make fog respect changes in FOV
-Fix height to be in world coordinates, not screen coordinates
+Change fog according to FOV
+Color sprites by fog

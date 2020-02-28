@@ -1,5 +1,6 @@
 #include <SDL2/SDL.h> //SDL main library functions
 #include <cmath>
+#include <algorithm>
 #include <vector>
 #include <string>
 #include <stdio.h>
@@ -8,6 +9,7 @@
 #include <fstream>
 #include <iomanip>
 #include "blocktypes.h" //world map blocks
+#include "game_sprites.h" //objects
 
 //some constants for handling files on different operating systems
 #ifdef _WIN32
@@ -128,8 +130,10 @@ SDL_Texture *gceilTex = NULL; //ceiling texture
 SDL_Texture *gfloorBuffer = NULL; //buffer texture. calculated perspective mapping of the floor and ceiling will be plotted onto this buffer
 SDL_Texture *gfogTex = NULL; //buffer texture. calculated fog will be plotted onto this texture
 SDL_Texture *weaponTex = NULL; //current player weapon (from first person perspective)
+SDL_Texture **pickupTex = NULL;
 
 const int totalWallTextures = 3; //number of unique wall textures. needs to be read from a config or dynamically calculated
+const int totalPickupTextures = 4;
 
 SDL_Rect gskyDestRect; //used for skybox. where (on screen) to draw the skybox
 SDL_Rect gskySrcRect; //used for skybox. where (on skybox texture) to grab current skybox from
@@ -142,9 +146,14 @@ std::stringstream ssFPS; //string for window title. currently used for debug inf
 
 std::vector<std::vector<Map_Block>> leveldata; //current map information as a 2d dynamic size array
 
+std::vector<Game_Sprite> allSprites;
+std::vector<double> spriteDistances;
+std::vector<int> spriteOrder;
+
 bool init(); //basic start-SDL stuff
 bool initWindow(); //get window and hardware accelerated (if possible) renderer
 bool initTextures(); //load in assets and make textures from them all
+void initAllSprites();
 void newlevel(bool warpView); //reset some basic settings and load another level
 void loadLevel(std::string path); //read in map data and populate leveldata array with it
 bool update(); //update world 1 tick
@@ -161,6 +170,7 @@ void drawFloor(double* wallDist, int* drawStart, int* drawEnd, int* side, int* m
 void drawFloor();
 void drawMiniMap(); //draw little debug color minimap
 void drawSkyBox(); //paste a skybox
+void drawSprites(double* wallDist);
 void close(); //prepare to quit game
 SDL_Texture *loadTexture(const std::string &file, SDL_Renderer *ren); // loads a BMP image into a texture on the rendering device
 void renderTexture(SDL_Texture *tex, SDL_Renderer *ren, SDL_Rect dst, SDL_Rect *clip); // draw an SDL_texture to an SDL_renderer at position x,y
@@ -179,7 +189,9 @@ int main(int argc, char **argv)
     //init SDL
     if (init())
     {
-        newlevel(false);      
+        newlevel(false);
+        
+        initAllSprites();      
         //Main loop flag
         bool quit = false;
         while (!quit)
@@ -330,6 +342,18 @@ bool initTextures()
         }
     }
 
+    pickupTex = new SDL_Texture *[totalPickupTextures];
+    for(int i = 0; i < totalPickupTextures; i++)
+    {
+        texFileName.str(std::string());
+        texFileName << "resources" << PATH_SYM << "sprites" << PATH_SYM << "pickup" << i << ".bmp";
+        pickupTex[i] = loadImageColorKey(texFileName.str(), cMagenta);
+        if (pickupTex[i] == NULL)
+        {
+            success = false;
+        }
+    }
+
     texFileName.str(std::string());
     texFileName << "resources" << PATH_SYM << "sprites" << PATH_SYM << "shotgun1.bmp";
     weaponTex = loadImageColorKey(texFileName.str(), cMagenta);
@@ -371,6 +395,32 @@ bool initTextures()
         }
     }
     return success;
+}
+
+void initAllSprites() //just a shitty test function to spawn 20 of the same object. this is just to varify we CAN draw sprites
+{
+    int totalSprites = 20;
+    int eachType = 5;
+    for(int n = 0; n < totalPickupTextures; n++)
+    {
+        for(int i = n*eachType; i < std::min((n+1)*eachType, totalSprites); i++)
+        {
+            allSprites.push_back(Game_Sprite());
+            allSprites[i].texID = n;
+            allSprites[i].worldX = posX - 2.5 + 5.0 * ((double) rand() / (RAND_MAX));
+            allSprites[i].worldY = posY - 2.5 + 5.0 * ((double) rand() / (RAND_MAX));
+            SDL_QueryTexture(pickupTex[allSprites[i].texID], NULL, NULL, & allSprites[i].image.w, & allSprites[i].image.h);
+            allSprites[i].width = 0.1*(n+1);
+            allSprites[i].height = std::min(1.0, allSprites[i].width * (allSprites[i].image.h / allSprites[i].image.w));
+            allSprites[i].image.x = 0;
+            allSprites[i].image.y = 0;
+            
+        }
+    }
+
+
+    spriteDistances.resize(totalSprites);
+    spriteOrder.resize(totalSprites);    
 }
 
 bool update()
@@ -607,6 +657,7 @@ void calcRaycast()
         drawWorldGeoFlat(wallDist, side, mapX, mapY);
     else
         drawWorldGeoTex(wallDist, side, mapX, mapY);
+    drawSprites(wallDist);
 }
 
 void calcFloorDist()
@@ -1049,6 +1100,109 @@ void drawSkyBox()
         SDL_RenderCopy(gRenderer, gskyTex, &gskySrcRect, &gskyDestRect); //now paste our chunk of sky onto the renderer
 }
 
+void drawSprites(double* wallDist)
+{
+
+    //TODO do a better job of sorting sprites
+    for(std::size_t i = 0; i != allSprites.size(); ++i)
+    {
+        spriteDistances[i] = ((posX - allSprites[i].worldX)*(posX - allSprites[i].worldX)+(posY - allSprites[i].worldY)*(posY - allSprites[i].worldY));
+        spriteOrder[i] = i;
+    }
+    
+
+    //void sortSprites(int* order, double* dist, int amount)
+    int amount = allSprites.size();
+    std::vector<std::pair<double, int>> sortSpritePair(amount);
+    for(int i = 0; i < amount; i++) {
+        sortSpritePair[i].first = spriteDistances[i];
+        sortSpritePair[i].second = spriteOrder[i];
+    }
+    std::sort(sortSpritePair.begin(), sortSpritePair.end());
+    // restore in reverse order to go from farthest to nearest
+    for(int i = 0; i < amount; i++) {
+        spriteDistances[i] = sortSpritePair[amount - i - 1].first;
+        spriteOrder[i] = sortSpritePair[amount - i - 1].second;
+    }
+
+
+    double invDet = 1.0 / (planeX * dirY - dirX * planeY); //required for correct matrix multiplication
+
+    for(auto i = 0; i < amount; ++i)
+    {
+        double spriteX = allSprites[spriteOrder[i]].worldX - posX;
+        double spriteY = allSprites[spriteOrder[i]].worldY - posY;
+
+        //transform sprite with the inverse camera matrix
+        // [ planeX   dirX ] -1                                       [ dirY      -dirX ]
+        // [               ]       =  1/(planeX*dirY-dirX*planeY) *   [                 ]
+        // [ planeY   dirY ]                                          [ -planeY  planeX ]
+
+        double transformY = invDet * (-planeY * spriteX + planeX * spriteY); //this is actually the depth inside the screen, that what Z is in 3D
+        if(transformY > 0) //transformY values < 0 are behind player
+        {
+            double transformX = invDet * (dirY * spriteX - dirX * spriteY);
+            int spriteScreenX = int((gscreenWidth / 2) * (1 + transformX / transformY));
+
+            int spriteHeight = abs(int(gscreenHeight / (transformY))); //using 'transformY' instead of the real distance prevents fisheye
+
+
+            //calculate lowest and highest pixel to fill in current stripe   
+            int drawEndY = spriteHeight / 2 + gscreenHeight / 2 + (vertHeight * abs(int(gscreenHeight / (transformY)))) + vertLook;
+
+            spriteHeight *= allSprites[spriteOrder[i]].height;
+
+            int drawStartY = drawEndY - spriteHeight;
+
+            //calculate width of the sprite
+            int spriteWidth = abs( int (gscreenHeight / (transformY))) * allSprites[spriteOrder[i]].width;        
+            int drawEndX = spriteWidth / 2 + spriteScreenX;
+            int drawStartX = drawEndX - spriteWidth;
+
+            // int texWidth, texHeight;
+            // SDL_QueryTexture(pickupTex[allSprites[spriteOrder[i]].texID], NULL, NULL, &texWidth, &texHeight);
+            SDL_Rect clip, dest;
+            clip.x = drawStartX;
+            clip.y = drawStartY;
+            clip.w = drawEndX - drawStartX;
+            clip.h = drawEndY - drawStartY;
+            dest = clip;
+
+            if(drawStartX < 0) drawStartX = 0;
+            if(drawEndX >= gscreenWidth) drawEndX = gscreenWidth - 1;
+            clip.x = drawStartX;
+            clip.w = drawEndX - drawStartX;
+
+            for(auto testX = drawStartX; testX <= drawEndX+1; testX++)
+            {
+                clip.x = testX;
+                if(transformY < wallDist[testX])
+                    break;
+            }
+            for(auto testX = drawEndX; testX >= clip.x; --testX)
+            {
+                clip.w = testX-clip.x;
+                if(transformY < wallDist[testX])
+                    break;
+            }
+
+
+            if(clip.y < 0) clip.y = 0;
+            if(clip.y+clip.h >= gscreenHeight) clip.h = gscreenHeight - clip.y - 1;
+
+
+            SDL_RenderSetClipRect(gRenderer, &clip);
+            SDL_RenderCopy(gRenderer, pickupTex[allSprites[spriteOrder[i]].texID], &allSprites[spriteOrder[i]].image, &dest);
+            SDL_RenderSetClipRect(gRenderer, NULL);
+
+        }
+    }
+
+
+
+
+}
+
 void close()
 {
     //destroy renderer
@@ -1326,7 +1480,7 @@ void newlevel(bool warpView)
         planeX = 0;
         planeY = 1;
         vertLook = 0;
-        vertHeight = 0;
+        vertHeight = 0.1;
         viewTrip = 0;
 
         calcFloorDist();
