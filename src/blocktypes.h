@@ -9,6 +9,9 @@ struct Map_Block {
     int wallTex[4] = {0, 0, 0 , 0}; //NSEW wall texture index numbers
     int floorTex = 0; //texture for floor on this block
     int ceilTex = 0; //texture for ceiling on this block
+    bool isDoor = false;
+    bool timerOn = false;
+    double timer = 1.0;
 };
 
 enum WALL_DIR {NORTH, SOUTH, EAST, WEST};
@@ -35,6 +38,9 @@ void initBlockTypes()
     blockTypes.at(BLOCK_AIR).wallTex[WEST] = 0;
     blockTypes.at(BLOCK_AIR).floorTex = 0;
     blockTypes.at(BLOCK_AIR).ceilTex = 0;
+    blockTypes.at(BLOCK_AIR).isDoor = false;
+    blockTypes.at(BLOCK_AIR).timerOn = false;
+    blockTypes.at(BLOCK_AIR).timer = 1.0;
 
     // BLOCK 1 - SOLID WALL TYPE 1
     blockTypes.at(BLOCK_WALL).block_id = BLOCK_WALL;
@@ -46,6 +52,9 @@ void initBlockTypes()
     blockTypes.at(BLOCK_WALL).wallTex[WEST] = 0;
     blockTypes.at(BLOCK_WALL).floorTex = 0;
     blockTypes.at(BLOCK_WALL).ceilTex = 0;
+    blockTypes.at(BLOCK_WALL).isDoor = false;
+    blockTypes.at(BLOCK_WALL).timerOn = false;
+    blockTypes.at(BLOCK_WALL).timer = 1.0;
 
     // BLOCK 2 - EXIT PANEL
     blockTypes.at(BLOCK_PANEL).block_id = BLOCK_PANEL;
@@ -57,6 +66,9 @@ void initBlockTypes()
     blockTypes.at(BLOCK_PANEL).wallTex[WEST] = 1;
     blockTypes.at(BLOCK_PANEL).floorTex = 0;
     blockTypes.at(BLOCK_PANEL).ceilTex = 0;
+    blockTypes.at(BLOCK_PANEL).isDoor = false;
+    blockTypes.at(BLOCK_PANEL).timerOn = false;
+    blockTypes.at(BLOCK_PANEL).timer = 1.0;
 
     // BLOCK 3 - DOOR TYPE 1
     blockTypes.at(BLOCK_DOOR).block_id = BLOCK_DOOR;
@@ -68,6 +80,9 @@ void initBlockTypes()
     blockTypes.at(BLOCK_DOOR).wallTex[WEST] = 2;
     blockTypes.at(BLOCK_DOOR).floorTex = 0;
     blockTypes.at(BLOCK_DOOR).ceilTex = 0;
+    blockTypes.at(BLOCK_DOOR).isDoor = true;
+    blockTypes.at(BLOCK_DOOR).timerOn = false;
+    blockTypes.at(BLOCK_DOOR).timer = 1.0;
 }
 
 //change a map block's id and internal settings
@@ -84,6 +99,9 @@ void changeBlock(Map_Block* blockIn, unsigned int newID)
         blockIn->wallTex[WEST] = blockTypes[newID].wallTex[WEST];
         blockIn->floorTex = blockTypes[newID].floorTex;
         blockIn->ceilTex = blockTypes[newID].ceilTex;
+        blockIn->isDoor = blockTypes[newID].isDoor;
+        blockIn->timerOn = blockTypes[newID].timerOn;
+        blockIn->timer = blockTypes[newID].timer;
     }
     return;
 }
