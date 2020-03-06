@@ -60,7 +60,7 @@ SDL_Rect miniMapDot = {miniMapRect.x, miniMapRect.y, 2, 2}; //for drawing dots o
 bool mapOn = false; //toggle mini map on/off
 
 double floorDist[gscreenHeight];
-double ceilDist[gscreenHeight];
+//double ceilDist[gscreenHeight];
 
 const double radToDeg = 180 / M_PI; //convenience numbers
 const double degToRad = M_PI / 180;
@@ -131,6 +131,7 @@ SDL_Texture *gfloorBuffer = NULL; //buffer texture. calculated perspective mappi
 SDL_Texture *gfogTex = NULL; //buffer texture. calculated fog will be plotted onto this texture
 SDL_Texture *weaponTex = NULL; //current player weapon (from first person perspective)
 SDL_Texture **pickupTex = NULL;
+SDL_Texture **maskTex = NULL;
 
 const int totalWallTextures = 3; //number of unique wall textures. needs to be read from a config or dynamically calculated
 const int totalPickupTextures = 4;
@@ -186,12 +187,11 @@ void resizeWindow(bool letterbox);
 
 int main(int argc, char **argv)
 {
+
     //init SDL
     if (init())
     {
-        newlevel(false);
-        
-        initAllSprites();      
+        newlevel(false);   
         //Main loop flag
         bool quit = false;
         while (!quit)
@@ -206,7 +206,6 @@ int main(int argc, char **argv)
         close();
         printf("Game initialization failed. Something crucial broke. Rage quitting.\n");
     }
-
     return 0;
 }
 
@@ -354,6 +353,18 @@ bool initTextures()
         }
     }
 
+    maskTex = new SDL_Texture *[totalPickupTextures];
+    for(int i = 0; i < totalPickupTextures; i++)
+    {
+        texFileName.str(std::string());
+        texFileName << "resources" << PATH_SYM << "sprites" << PATH_SYM << "mask" << i << ".bmp";
+        maskTex[i] = loadImageColorKey(texFileName.str(), cMagenta);
+        if (maskTex[i] == NULL)
+        {
+            success = false;
+        }
+    }
+
     texFileName.str(std::string());
     texFileName << "resources" << PATH_SYM << "sprites" << PATH_SYM << "shotgun1.bmp";
     weaponTex = loadImageColorKey(texFileName.str(), cMagenta);
@@ -401,6 +412,7 @@ void initAllSprites() //just a shitty test function to spawn 20 of the same obje
 {
     int totalSprites = 20;
     int eachType = 5;
+    allSprites.clear();
     for(int n = 0; n < totalPickupTextures; n++)
     {
         for(int i = n*eachType; i < std::min((n+1)*eachType, totalSprites); i++)
@@ -503,7 +515,6 @@ void calcRaycast()
 
     double cameraX, rayDirX, rayDirY, sideDistX, sideDistY, deltaDistX = 0, deltaDistY = 0, perpWallDist;
     int stepX, stepY, hit;    
-    
     //ACTUAL RAYCAST LOGIC
     for (int x = 0; x < gscreenWidth; x++)
     {
@@ -662,11 +673,40 @@ void calcRaycast()
 
 void calcFloorDist()
 {
-    for(int y = 0; y < gscreenHeight; y++) //define a height table for floor and ceiling calculations later
-        {
-            floorDist[y] = (gscreenHeight*vFOV+(2*vertHeight*gscreenHeight))/ ((2.0*(y-vertLook) - (gscreenHeight)));
-            ceilDist[y] = (gscreenHeight*vFOV-(2*vertHeight*gscreenHeight))/ ((2.0*(y+vertLook) - (gscreenHeight)));
-        }
+
+    for(int y = 0; y < ((gscreenHeight / 2) + vertLook); y++)
+    {
+        // Current y position compared to the center of the screen (the horizon)
+        int p = y - ((gscreenHeight / 2) + vertLook);
+
+        // Vertical position of the camera.
+        double posZ = (gscreenHeight / 2.0) - (vertHeight * gscreenHeight);
+
+        // Horizontal distance from the camera to the floor for the current row.
+        // 0.5 is the z position exactly in the middle between floor and ceiling.
+        double rowDistance = -posZ / p;
+
+        floorDist[y] = rowDistance;
+    }
+    for(int y = ((gscreenHeight / 2) + vertLook); y < gscreenHeight; y++)
+    {
+        // Current y position compared to the center of the screen (the horizon)
+        int p = y - ((gscreenHeight / 2) + vertLook);
+        // Vertical position of the camera.
+        double posZ = (gscreenHeight / 2.0) + (vertHeight * gscreenHeight);
+
+        // Horizontal distance from the camera to the floor for the current row.
+        // 0.5 is the z position exactly in the middle between floor and ceiling.
+        double rowDistance = posZ / p;
+
+        floorDist[y] = rowDistance;
+    }
+
+    // for(int y = 0; y < gscreenHeight; y++) //define a height table for floor and ceiling calculations later
+    // {
+    //     floorDist[y] = (gscreenHeight*vFOV+(2*vertHeight*gscreenHeight))/ ((2.0*(y-vertLook) - (gscreenHeight)));
+    //     ceilDist[y] = (gscreenHeight*vFOV-(2*vertHeight*gscreenHeight))/ ((2.0*(y+vertLook) - (gscreenHeight)));
+    // }
 }
 
 void drawWorldGeoFlat(double* wallDist, int* side, int* mapX, int* mapY)
@@ -678,6 +718,7 @@ void drawWorldGeoFlat(double* wallDist, int* side, int* mapX, int* mapY)
     SDL_SetRenderDrawColor(gRenderer, 0x7f, 0x7f, 0x7f, 0xff);
     SDL_RenderFillRect(gRenderer, &gfloorRect);
     int lineHeight, drawStart, drawEnd;
+    SDL_Rect wallRect;
     for (int x = 0; x < gscreenWidth; x++)
         {
         lineHeight = (int)(gscreenHeight * vFOV / wallDist[x]);
@@ -723,8 +764,14 @@ void drawWorldGeoFlat(double* wallDist, int* side, int* mapX, int* mapY)
 
         //render vertical lines for raycast based on calculations
 
+        
+        
+        wallRect.x = x;
+        wallRect.y = drawStart;
+        wallRect.w = 1;
+        wallRect.h = drawEnd - drawStart;
         SDL_SetRenderDrawColor(gRenderer, color.r, color.g, color.b, color.a);
-        SDL_RenderDrawLine(gRenderer, x, drawStart, x, drawEnd);
+        SDL_RenderFillRect(gRenderer, &wallRect);
     }
 }
 
@@ -804,7 +851,6 @@ void drawWorldGeoTex(double* wallDist, int* side, int* mapX, int* mapY)
         SDL_SetTextureColorMod(gcurrTex, brightness, brightness, brightness);
         renderTexture(gcurrTex, gRenderer, line, &sample);   
     }
-
     //render distance fog on top of floor/ceiling textures
     //
     //THIS IS SLOOOOWWWWW
@@ -826,11 +872,9 @@ void drawFloor() //affine mapping accross entire screen, has artifacts
     int floorTexWidth, floorTexHeight, ceilTexWidth, ceilTexHeight;
 
     //lock floor textures and a screen buffer texture for read/write operations
-
     SDL_LockTexture(gfloorTex, NULL, &floorTexPixels, &floorTexPitch); 
     SDL_LockTexture(gceilTex, NULL, &ceilTexPixels, &ceilTexPitch);
     SDL_LockTexture(gfloorBuffer, NULL, &floorBufferPixels, &floorBufferPitch);
-
     Uint32 *bufferPixels = (Uint32 *)floorBufferPixels; //access pixel data as a bunch of Uint32s. add handling for 24 bit possibility?
     Uint32 *ufloorTexPix = (Uint32 *)floorTexPixels;
     Uint32 *uceilTexPix = (Uint32 *)ceilTexPixels;
@@ -852,23 +896,31 @@ void drawFloor() //affine mapping accross entire screen, has artifacts
     {
         for(int y = 0; y < ((gscreenHeight / 2) + vertLook); y++)
         {
-            // Current y position compared to the center of the screen (the horizon)
-            int p = y - ((gscreenHeight / 2) + vertLook);
-            // Vertical position of the camera.
-            float posZ = (gscreenHeight / 2.0) - (vertHeight * gscreenHeight);
+            // // Current y position compared to the center of the screen (the horizon)
+            // int p = y - ((gscreenHeight / 2) + vertLook);
 
-            // Horizontal distance from the camera to the floor for the current row.
-            // 0.5 is the z position exactly in the middle between floor and ceiling.
-            float rowDistance = -posZ / p;
+            // // Vertical position of the camera.
+            // float posZ = (gscreenHeight / 2.0) - (vertHeight * gscreenHeight);
+
+            // // Horizontal distance from the camera to the floor for the current row.
+            // // 0.5 is the z position exactly in the middle between floor and ceiling.
+            // float rowDistance = -posZ / p;
 
             // calculate the real world step vector we have to add for each x (parallel to camera plane)
             // adding step by step avoids multiplications with a weight in the inner loop
-            float floorStepX = rowDistance * (rayDirX1 - rayDirX0) / gscreenWidth;
-            float floorStepY = rowDistance * (rayDirY1 - rayDirY0) / gscreenWidth;
+            // float floorStepX = rowDistance * (rayDirX1 - rayDirX0) / gscreenWidth;
+            // float floorStepY = rowDistance * (rayDirY1 - rayDirY0) / gscreenWidth;
+            float floorStepX = floorDist[y] * (rayDirX1 - rayDirX0) / gscreenWidth;
+            float floorStepY = floorDist[y] * (rayDirY1 - rayDirY0) / gscreenWidth;
+
 
             // real world coordinates of the leftmost column. This will be updated as we step to the right.
-            float floorX = posX + rowDistance * rayDirX0;
-            float floorY = posY + rowDistance * rayDirY0;
+            // float floorX = posX + rowDistance * rayDirX0;
+            // float floorY = posY + rowDistance * rayDirY0;
+            float floorX = posX + floorDist[y] * rayDirX0;
+            float floorY = posY + floorDist[y] * rayDirY0;
+
+
             for(int x = 0; x < gscreenWidth; ++x)
             {
                 // the cell coord is simply got from the integer parts of floorX and floorY
@@ -891,26 +943,32 @@ void drawFloor() //affine mapping accross entire screen, has artifacts
 
         }
     }    
-
     for(int y = ((gscreenHeight / 2) + vertLook); y < gscreenHeight; y++)
     {
-            // Current y position compared to the center of the screen (the horizon)
-            int p = y - ((gscreenHeight / 2) + vertLook);
-            // Vertical position of the camera.
-            float posZ = (gscreenHeight / 2.0) + (vertHeight * gscreenHeight);
+            // // Current y position compared to the center of the screen (the horizon)
+            // int p = y - ((gscreenHeight / 2) + vertLook);
+            // // Vertical position of the camera.
+            // float posZ = (gscreenHeight / 2.0) + (vertHeight * gscreenHeight);
 
-            // Horizontal distance from the camera to the floor for the current row.
-            // 0.5 is the z position exactly in the middle between floor and ceiling.
-            float rowDistance = posZ / p;
+            // // Horizontal distance from the camera to the floor for the current row.
+            // // 0.5 is the z position exactly in the middle between floor and ceiling.
+            // float rowDistance = posZ / p;
 
             // calculate the real world step vector we have to add for each x (parallel to camera plane)
             // adding step by step avoids multiplications with a weight in the inner loop
-            float floorStepX = rowDistance * (rayDirX1 - rayDirX0) / gscreenWidth;
-            float floorStepY = rowDistance * (rayDirY1 - rayDirY0) / gscreenWidth;
+            // float floorStepX = rowDistance * (rayDirX1 - rayDirX0) / gscreenWidth;
+            // float floorStepY = rowDistance * (rayDirY1 - rayDirY0) / gscreenWidth;
+
+            float floorStepX = floorDist[y] * (rayDirX1 - rayDirX0) / gscreenWidth;
+            float floorStepY = floorDist[y] * (rayDirY1 - rayDirY0) / gscreenWidth;
 
             // real world coordinates of the leftmost column. This will be updated as we step to the right.
-            float floorX = posX + rowDistance * rayDirX0;
-            float floorY = posY + rowDistance * rayDirY0;
+            // float floorX = posX + rowDistance * rayDirX0;
+            // float floorY = posY + rowDistance * rayDirY0;
+
+            float floorX = posX + floorDist[y] * rayDirX0;
+            float floorY = posY + floorDist[y] * rayDirY0;
+
             for(int x = 0; x < gscreenWidth; ++x)
             {
                 // the cell coord is simply got from the integer parts of floorX and floorY
@@ -932,7 +990,6 @@ void drawFloor() //affine mapping accross entire screen, has artifacts
                 bufferPixels[gscreenWidth * y + x] = color;
             }     
     }
-
     //Render floor by unlocking floor textures and buffer, and copying the entire buffer onto the render target in one go
     //Unlock texture
     SDL_UnlockTexture(gfloorTex);
@@ -1036,7 +1093,8 @@ void drawFloor(double* wallDist, int* drawStart, int* drawEnd, int* side, int* m
             for (int y = gscreenHeight - drawStart[x]; y < gscreenHeight; y++)
             {
                 
-                weight = (ceilDist[y] - distPlayer) / (wallDist[x] - distPlayer);
+                //weight = (ceilDist[y] - distPlayer) / (wallDist[x] - distPlayer);
+                weight = (floorDist[gscreenHeight - y - 1] - distPlayer) / (wallDist[x] - distPlayer);
                 currentFloorX = weight * floorXWall + (1.0 - weight) * posX;
                 currentFloorY = weight * floorYWall + (1.0 - weight) * posY;
                 floorTexX = int(currentFloorX * ceilTexWidth) % ceilTexWidth;
@@ -1109,8 +1167,6 @@ void drawSprites(double* wallDist)
         spriteDistances[i] = ((posX - allSprites[i].worldX)*(posX - allSprites[i].worldX)+(posY - allSprites[i].worldY)*(posY - allSprites[i].worldY));
         spriteOrder[i] = i;
     }
-    
-
     //void sortSprites(int* order, double* dist, int amount)
     int amount = allSprites.size();
     std::vector<std::pair<double, int>> sortSpritePair(amount);
@@ -1125,6 +1181,7 @@ void drawSprites(double* wallDist)
         spriteOrder[i] = sortSpritePair[amount - i - 1].second;
     }
 
+    double brightness;
 
     double invDet = 1.0 / (planeX * dirY - dirX * planeY); //required for correct matrix multiplication
 
@@ -1159,8 +1216,6 @@ void drawSprites(double* wallDist)
             int drawEndX = spriteWidth / 2 + spriteScreenX;
             int drawStartX = drawEndX - spriteWidth;
 
-            // int texWidth, texHeight;
-            // SDL_QueryTexture(pickupTex[allSprites[spriteOrder[i]].texID], NULL, NULL, &texWidth, &texHeight);
             SDL_Rect clip, dest;
             clip.x = drawStartX;
             clip.y = drawStartY;
@@ -1190,10 +1245,28 @@ void drawSprites(double* wallDist)
             if(clip.y < 0) clip.y = 0;
             if(clip.y+clip.h >= gscreenHeight) clip.h = gscreenHeight - clip.y - 1;
 
+            if(clip.x+clip.w >= 0 && clip.x < gscreenWidth)
+            {
+                SDL_RenderSetClipRect(gRenderer, &clip);
+                SDL_SetTextureBlendMode(pickupTex[allSprites[spriteOrder[i]].texID], SDL_BLENDMODE_BLEND);
+                SDL_RenderCopy(gRenderer, pickupTex[allSprites[spriteOrder[i]].texID], &allSprites[spriteOrder[i]].image, &dest);
 
-            SDL_RenderSetClipRect(gRenderer, &clip);
-            SDL_RenderCopy(gRenderer, pickupTex[allSprites[spriteOrder[i]].texID], &allSprites[spriteOrder[i]].image, &dest);
-            SDL_RenderSetClipRect(gRenderer, NULL);
+                if(fogOn && (!debugColors))
+                {
+                    int shadowX = std::min(std::max(dest.x + (dest.w/2),0),gscreenWidth-1);        
+                    transformY *= (90.0/hFOV);     
+                    brightness = std::min(1.0,std::max(worldFog,std::min(playerFog,playerFog/((fogMultiplier* brightSin[shadowX]) * transformY * transformY))));  
+                    brightness = std::max(std::min(brightness, playerFog),worldFog);
+
+                    fogColor.a = (Uint8)255.0*(1.0-std::min(1.0,std::max(worldFog, brightness)));
+                    SDL_SetTextureBlendMode(maskTex[allSprites[spriteOrder[i]].texID], SDL_BLENDMODE_BLEND);
+                    SDL_SetTextureColorMod(maskTex[allSprites[spriteOrder[i]].texID], fogColor.r, fogColor.g, fogColor.b);
+                    SDL_SetTextureAlphaMod(maskTex[allSprites[spriteOrder[i]].texID], fogColor.a);
+                    SDL_RenderCopy(gRenderer, maskTex[allSprites[spriteOrder[i]].texID], &allSprites[spriteOrder[i]].image, &dest);
+                }
+
+                SDL_RenderSetClipRect(gRenderer, NULL);
+            }
 
         }
     }
@@ -1345,12 +1418,12 @@ void generatefogMask(SDL_Texture* tex, int* drawStart, int* drawEnd, double* wal
     int texWidth;
     int texHeight;
     void* texPix = NULL;
-    int pitch, lineHeight;
-    SDL_LockTexture(tex, NULL, &texPix, &pitch);
-    Uint32* pixels = (Uint32*)texPix;
+    int pitch;//, lineHeight;
     double brightness = 0;
     Uint32 format;
     SDL_QueryTexture(tex, &format, NULL, &texWidth, &texHeight);
+    SDL_LockTexture(tex, NULL, &texPix, &pitch);
+    Uint32* pixels = (Uint32*)texPix;
     SDL_PixelFormat *mappingFormat = SDL_AllocFormat(format);
     for(int x = 0; x < texWidth; x++)
     {
@@ -1360,14 +1433,16 @@ void generatefogMask(SDL_Texture* tex, int* drawStart, int* drawEnd, double* wal
 
         for(int y = 0; y < start; y++)
         {
-            brightness = std::min(1.0,std::max(worldFog,std::min(playerFog,playerFog/((fogMultiplier*  brightSin[x]) * ceilDist[texHeight-y] * ceilDist[texHeight-y]))));
+            double dist = floorDist[y] * floorDist[y] * (90.0/hFOV) * (90.0/hFOV);
+            brightness = std::min(1.0,std::max(worldFog,std::min(playerFog,playerFog/((fogMultiplier*  brightSin[x]) * dist))));
+            
             fogColor.a = (Uint8)255.0*(1.0-std::min(1.0,std::max(worldFog, brightness)));
             pixels[y * texWidth + x] = SDL_MapRGBA(mappingFormat, fogColor.r, fogColor.g, fogColor.b, fogColor.a);
         }
-        lineHeight = drawEnd[x] - drawStart[x];
-        brightness = std::max(std::min(1.0, (double)lineHeight * playerFog * brightSin[x] / (fogMultiplier*wallDist[x]*256.0)), worldFog);      
-        brightness = std::max(std::min((double)brightness, playerFog),worldFog);
-
+        
+        double tempdist = wallDist[x] * wallDist[x] * (90.0/hFOV) * (90.0/hFOV);
+        
+        brightness = std::min(1.0,std::max(worldFog,std::min(playerFog,playerFog/((fogMultiplier* brightSin[x]) * tempdist))));
         fogColor.a = (Uint8)255.0*(1.0-std::min(1.0,std::max(worldFog, brightness)));
         for(int y = start; y < end; y++)
         {
@@ -1375,7 +1450,8 @@ void generatefogMask(SDL_Texture* tex, int* drawStart, int* drawEnd, double* wal
         }
         for(int y = end; y < texHeight; y++)
         {
-            brightness = std::min(1.0,std::max(worldFog,std::min(playerFog,playerFog/((fogMultiplier* brightSin[x]) * floorDist[y] * floorDist[y]))));
+            double dist = floorDist[y] * floorDist[y] * (90.0/hFOV) * (90.0/hFOV);
+            brightness = std::min(1.0,std::max(worldFog,std::min(playerFog,playerFog/((fogMultiplier* brightSin[x]) * dist))));
             fogColor.a = (Uint8)255.0*(1.0-std::min(1.0,std::max(worldFog, brightness)));
             pixels[y * texWidth + x] = SDL_MapRGBA(mappingFormat, fogColor.r, fogColor.g, fogColor.b, fogColor.a);
         }
@@ -1482,7 +1558,7 @@ void newlevel(bool warpView)
         vertLook = 0;
         vertHeight = 0.1;
         viewTrip = 0;
-
+        initAllSprites();
         calcFloorDist();
 
         int tw, th;
